@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Roam 双语字幕 · 功能演示</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#fff;color:#293d50;font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif}header{padding:15px 28px;border-bottom:1px solid #e0e7ed;display:flex;justify-content:space-between;gap:20px}header span{color:#718294;font-size:13px}.layout{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(280px,1fr);gap:24px;padding:28px;max-width:1500px;margin:0 auto}.video iframe{width:100%;aspect-ratio:16/9;border:0;display:block;border-radius:6px}.note{border:1px solid #dfe7ee;border-radius:9px;padding:22px;height:fit-content}.note h1{font-size:21px;margin:0 0 8px}.note h2{font-size:15px;font-weight:600;margin-top:24px}.note p,.note li{font-size:14px}.hint{background:#f0f5fa;border-left:3px solid #2869a7;padding:10px 14px;font-size:12px;margin-bottom:16px}.tag{color:#2869a7}.quiet{color:#718294;font-size:12px}.sample{color:#176c69}a{color:#2869a7}.note code{font-size:12px}.note li{margin:10px 0}@media(max-width:800px){.layout{grid-template-columns:1fr;padding:16px}header{padding:12px 16px}header span{display:none}}
+  </style>
+</head>
+<body>
+  <header><strong>Roam Research · 双语视频工作台</strong><span>0.2.0-beta.1 · Draft 测试版，不访问你的图谱</span></header>
+  <main class="layout">
+    <section class="video">
+      <div class="hint">本页模拟 Roam 的嵌入视频。YouTube 视频用于验证同步；下方示例文件是人工编写的测试字幕，并非该视频真实转录。真实获取需要用 npm start 启动正式服务。</div>
+      <iframe title="YouTube 播放器 API 示例视频" src="https://www.youtube.com/embed/M7lc1UVf-VE?enablejsapi=1" allow="autoplay; encrypted-media; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
+    </section>
+    <aside class="note">
+      <p class="quiet">Reading List / 视频学习</p>
+      <h1>一边看，一边理解</h1>
+      <p>原文留在眼前，译文跟着播放位置走。</p>
+      <ol>
+        <li>启动本机服务后，点击视频下方的“设置”，输入终端中的配对码。</li>
+        <li>点击“获取字幕”；也可以<a href="/demo/sample.vtt" download="sample.vtt">下载测试 VTT</a>后点击“导入字幕”。</li>
+        <li>点击“开始翻译”，然后播放或点击字幕跳转。</li>
+        <li>用“复制当前双语”将带时间链接的片段粘贴到笔记中。</li>
+      </ol>
+      <h2>测试字幕摘录</h2>
+      <p>A useful tool should help you stay with the idea.<br><span class="sample">好用的工具，应该帮助你专注于想法本身。</span></p>
+      <h2>使用自己的 API</h2>
+      <p>在本机 <code>.env</code> 中设置 <code>OPENAI_BASE_URL</code>、<code>OPENAI_API_KEY</code>、<code>OPENAI_MODEL</code>，再重启服务。支持兼容 Chat Completions 的 API，包括本机模型。</p>
+      <p class="quiet">首次请求可能出现浏览器“本地网络访问”提示。画面内字幕在 YouTube 原生全屏 / 画中画内不可见；普通 Roam 视频布局支持。</p>
+      <p class="tag">#视频学习　#双语阅读</p>
+    </aside>
+  </main>
+  <script src="/roam-youtube-bilingual.js"></script>
+</body>
+</html>
