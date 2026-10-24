@@ -1,12 +1,12 @@
 {
   "name": "roam-youtube-bilingual",
-  "version": "0.3.0-beta.1",
+  "version": "0.4.0-beta.1",
   "private": true,
   "type": "module",
   "description": "Roam Research 双语 YouTube 字幕插件与本机 API 服务",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "start": "node --env-file-if-exists=.env server/index.mjs",
+    "start": "node server/index.mjs",
     "demo": "node server/index.mjs --demo",
     "test": "node --test test/*.test.mjs",
     "check": "node scripts/check.mjs"

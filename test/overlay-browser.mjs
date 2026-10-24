@@ -43,7 +43,7 @@ export async function runInVideoAcceptance() {
     frame.addEventListener('load', () => { clearTimeout(timeout); resolve(); }, { once: true });
     frame.srcdoc = '<!doctype html><p>Isolated video clock fixture</p>';
   });
-  sessionStorage.setItem('roam-youtube-bilingual/session/v1', JSON.stringify({ service: location.origin, token: '', source: 'en', target: 'zh-CN', fontScale: 1, bottomRatio: 0.08 }));
+  sessionStorage.setItem('roam-youtube-bilingual/session/v1', JSON.stringify({ provider: 'api', service: location.origin, token: '', source: 'en', target: 'zh-CN', fontScale: 1, bottomRatio: 0.08 }));
   const originalFetch = window.fetch;
   const calls = [];
   let holdTranslation = false, releaseLate, failProvider = false;
@@ -76,12 +76,10 @@ export async function runInVideoAcceptance() {
     assert(surface().parentElement === frame.closest('.rm-video-player__container'), 'controls and subtitles mount inside the native player');
     assert(calls.length === 0, 'loading the extension makes no API requests');
     root().querySelector('.ryb-toggle').click();
-    assert(settingsRoot()?.querySelector('dialog').open, 'unconfigured in-video toggle opens setup rather than remaining disabled');
-    findButton(settingsRoot(), '预览画面内双语效果（不调用 API）').click();
-    assert(!root().querySelector('.ryb-captions').hidden && root().querySelector('.ryb-source').textContent && root().querySelector('.ryb-target').textContent, 'preview renders both languages in the player');
-    assert(root().querySelector('.ryb-preview-label').textContent.includes('非视频字幕') && calls.length === 0, 'style preview is labeled and makes no API calls');
-    root().querySelector('.ryb-toggle').click();
-    assert(root().querySelector('.ryb-captions').hidden, 'turning preview off hides the subtitle layer');
+    assert(settingsRoot()?.querySelector('dialog').open, 'explicit unconfigured API mode opens setup');
+    assert(!settingsRoot().querySelector('.ryb-preview-button'), 'sample subtitle preview has been removed');
+    findButton(settingsRoot(), '关闭').click();
+    assert(root().querySelector('.ryb-captions').hidden && calls.length === 0, 'no fabricated subtitles or API requests before activation');
     const hostile = document.createElement('style'); hostile.textContent = 'button,input,span{color:red!important;position:fixed!important} input[type=file]{display:block!important}'; document.head.append(hostile);
     assert(getComputedStyle(root().querySelector('.ryb-toggle')).position !== 'fixed', 'Shadow DOM isolates controls from Roam and theme styles');
     hostile.remove();

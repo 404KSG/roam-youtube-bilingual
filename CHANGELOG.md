@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.0-beta.1 — YouTube's own translation, 2026-10-25
+
+Draft preview only. Native YouTube translation is now the default; no AI model, API key, or pairing code is required.
+
+- Let YouTube fetch and render its real Chinese auto-translation. Overlay only the synchronized original English captions.
+- Use the observed `captions.track.translationLanguage` selection payload, with Chinese language-code mapping and bounded initialization retries. Manual selection in YouTube's caption menu remains the fallback for incompatible players.
+- Add strictly scoped, origin-checked read-only routes for source captions. Existing paid-API routes remain authenticated and are never a silent fallback.
+- Keep native CC enabled. Turning the plugin off removes the English overlay without disabling YouTube's Chinese captions.
+- Migrate old settings to YouTube mode and place English above native captions. Hide API credentials unless the user explicitly selects the optional API mode.
+- Remove sample-preview text and its entry point. Native mode rejects demo caption services.
+- Verify actual English plus YouTube-generated Chinese on the reported video, not a fixture translation. The source track contains 2108 cues.
+
 ## 0.3.0-beta.1 — In-video presentation, 2026-10-25
 
 Draft preview only. This redesign corrects the product direction: bilingual subtitles belong on the video, not in a permanent panel underneath it.

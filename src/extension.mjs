@@ -29,36 +29,42 @@ function saveConfig(next) {
   for (const video of videos.values()) {
     if (change !== 'display') {
       video.turnOff();
-      if (change === 'source' || serviceChanged) video.cues = [];
-      if (change === 'source' || change === 'translation') video.translations.clear();
+      if (change === 'source' || serviceChanged || change === 'provider') video.cues = [];
+      if (change === 'source' || change === 'translation' || change === 'provider') video.translations.clear();
       video.render();
     }
   }
   syncSurfaces();
 }
 async function request(path, body, signal, cfg = config) {
-  if (!cfg.token) throw new Error('请先在字幕设置中填写本机服务配对码。');
+  const nativeRequest = path.startsWith('/v1/youtube/');
+  if (!nativeRequest && !cfg.token) throw new Error('自定义 API 模式需要本机服务配对码；YouTube 模式不需要。');
   let response;
   try {
     response = await fetch(`${cfg.service}${path}`, {
       method: body === undefined ? 'GET' : 'POST', mode: 'cors', credentials: 'omit',
-      headers: { Authorization: `Bearer ${cfg.token}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+      headers: { ...(!nativeRequest ? { Authorization: `Bearer ${cfg.token}` } : {}), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       signal: AbortSignal.any([signal || new AbortController().signal, AbortSignal.timeout(90000)]),
     });
   } catch (error) {
     if (signal?.aborted || error.name === 'AbortError') throw new DOMException('Aborted', 'AbortError');
     if (error.name === 'TimeoutError') throw new Error('字幕请求超时，请稍后重试。');
-    throw new Error('无法连接本机服务。请先运行 start.command，再检查字幕设置中的地址和配对码。');
+    throw new Error(nativeRequest ? '本机原字幕服务未连接。请先运行 start.command；YouTube 模式不需要 API Key 或配对码。' : '无法连接本机服务，请运行 start.command 并检查 API 模式配对码。');
   }
   let data;
   try { data = await response.json(); }
   catch { if (signal?.aborted) throw new DOMException('Aborted', 'AbortError'); throw new Error('本机服务响应无效，请确认端口。'); }
-  if (!response.ok) throw new Error(data?.error || `本机服务返回 HTTP ${response.status}`);
+  if (!response.ok) {
+    if (nativeRequest && [401, 404].includes(response.status)) throw new Error('本机服务可能仍是旧版，请重启 start.command。YouTube 模式不需要配对码。');
+    throw new Error(data?.error || `本机服务返回 HTTP ${response.status}`);
+  }
   return data;
 }
-function assertTranslationReady(health) {
-  if (!health.demo && !health.apiConfigured) throw new Error('请先在本机 .env 中填写 API 地址、Key 和模型，再重启服务。也可先预览字幕显示效果。');
+function assertTranslationReady(health, provider) {
+  if (provider === 'youtube') {
+    if (health.demo || health.provider !== 'youtube-native') throw new Error('请运行正式的 npm start，而不是演示服务。YouTube 模式不需要 API。');
+  } else if (!health.demo && !health.apiConfigured) throw new Error('自定义 API 尚未配置。可以改用默认的“YouTube 自带翻译”，无需 Key。');
 }
 function disposeSettings(ref) {
   if (!ref || ref.disposed) return;
@@ -83,6 +89,14 @@ function openSettings(owner = null) {
   form.addEventListener('submit', (event) => event.preventDefault());
   form.append(element('h2', '', '视频内双语字幕'), element('p', 'ryb-muted', `${VERSION} · 原文与译文只显示在视频画面内，不在下方创建面板。`));
   const fields = {};
+  const providerLabel = element('label', 'ryb-field');
+  providerLabel.append(element('span', '', '翻译来源'));
+  const provider = element('select'); provider.name = 'provider';
+  for (const [value, text] of [['youtube', 'YouTube 自带翻译（默认，无需 API）'], ['api', '自定义 API（可选）']]) {
+    const option = element('option', '', text); option.value = value; provider.append(option);
+  }
+  provider.value = config.provider; fields.provider = provider;
+  providerLabel.append(provider); form.append(providerLabel);
   function field(key, label, type = 'text', options = {}) {
     const wrapper = element('label', 'ryb-field'); wrapper.append(element('span', '', label));
     const input = element('input'); input.name = key; input.type = type;
@@ -91,7 +105,7 @@ function openSettings(owner = null) {
     fields[key] = input; wrapper.append(input); return wrapper;
   }
   const appearance = element('div', 'ryb-setting-grid');
-  appearance.append(field('fontScale', '字幕大小（1 为默认）', 'number', { min: '0.75', max: '1.6', step: '0.05' }), field('bottomRatio', '距底部比例（0.08 为默认）', 'number', { min: '0.02', max: '0.25', step: '0.01' }));
+  appearance.append(field('fontScale', '字幕大小（1 为默认）', 'number', { min: '0.75', max: '1.6', step: '0.05' }), field('bottomRatio', '英文距底部比例（YouTube 默认 0.18）', 'number', { min: '0.02', max: '0.25', step: '0.01' }));
   form.append(appearance);
   const status = element('p', 'ryb-setting-status'); status.setAttribute('role', 'status');
   const readValues = () => validateConfig({ ...Object.fromEntries(Object.entries(fields).filter(([key]) => key !== 'offset').map(([key, input]) => [key, input.value.trim()])) });
@@ -100,16 +114,18 @@ function openSettings(owner = null) {
     if (owner && !owner.disposed && fields.offset) { owner.offset = Math.max(-3600, Math.min(3600, Number(fields.offset.value) || 0)); owner.render(); }
     return next;
   };
-  if (owner) {
-    const preview = button('预览画面内双语效果（不调用 API）', () => {
-      try { apply(); disposeSettings(ref); owner.preview(); } catch (error) { status.textContent = error.message; }
-    }, 'ryb-preview-button');
-    form.append(preview);
-  }
   const languages = element('div', 'ryb-setting-grid');
   languages.append(field('source', '原字幕语言，例如 en'), field('target', '译文语言，例如 zh-CN'));
-  form.append(languages, field('service', '本机字幕服务地址'), field('token', '本机服务配对码（不是 API Key）', 'password'));
-  form.append(element('p', 'ryb-muted', 'API Key 保存在本机 .env 中，不写入 Roam。先运行 start.command，再填写终端显示的配对码。翻译仅将所需原字幕发送到你配置的 API。'));
+  form.append(languages, field('service', '本机原字幕服务地址'));
+  const nativeHelp = element('p', 'ryb-muted', '中文由 YouTube 播放器自带翻译显示，插件只同步叠加英文。无需 API Key、模型或配对码。本机服务仅用于获取原文字幕。');
+  const apiBox = element('div', 'ryb-api-config');
+  apiBox.append(field('token', 'API 模式配对码（不是 API Key）', 'password'), element('p', 'ryb-muted', '仅自定义 API 模式需要本机 .env 中的 Key 和模型。原字幕会发送到你配置的供应商，并可能产生费用。'));
+  const updateProviderUI = () => { apiBox.hidden = provider.value !== 'api'; nativeHelp.hidden = provider.value !== 'youtube'; };
+  provider.addEventListener('change', () => {
+    if ([0.08, 0.18].includes(Number(fields.bottomRatio.value))) fields.bottomRatio.value = provider.value === 'youtube' ? '0.18' : '0.08';
+    updateProviderUI();
+  });
+  updateProviderUI(); form.append(nativeHelp, apiBox);
   if (owner) {
     const advanced = element('details', 'ryb-advanced');
     advanced.append(element('summary', '', '字幕文件、同步与全屏'));
@@ -133,7 +149,7 @@ function openSettings(owner = null) {
       void owner.surface.toggleFullscreen().catch((error) => owner.notice(error.message));
     });
     actions.append(full);
-    advanced.append(actions, input, field('offset', '时间偏移（正数让字幕延后，秒）', 'number', { min: '-3600', max: '3600', step: '0.5', value: String(owner.offset) }), element('p', 'ryb-muted', `已载入 ${owner.cues.length} 条原文，当前 ${formatTime(owner.time)}。如出现重复字幕，请关闭 YouTube 原生 CC。保持双语的全屏请使用上方按钮；YouTube 原生全屏和画中画不包含 Roam 外层字幕。`));
+    advanced.append(actions, input, field('offset', '时间偏移（正数让字幕延后，秒）', 'number', { min: '-3600', max: '3600', step: '0.5', value: String(owner.offset) }), element('p', 'ryb-muted', `已载入 ${owner.cues.length} 条原文，当前 ${formatTime(owner.time)}。YouTube 模式需要保留原生 CC，它负责显示中文；关闭“双语”仅收起英文。如果未自动切换，请在 YouTube 字幕菜单选择自动翻译→中文。保持两种字幕的全屏请用上方“双语全屏”。`));
     form.append(advanced);
   }
   const actions = element('div', 'ryb-actions');
@@ -141,9 +157,10 @@ function openSettings(owner = null) {
     check.disabled = true;
     try {
       const next = readValues(); ref.request?.abort(); ref.request = new AbortController();
-      const health = verifyHealth(await request('/health', undefined, ref.request.signal, next));
+      const health = verifyHealth(await request(next.provider === 'youtube' ? '/v1/youtube/health' : '/health', undefined, ref.request.signal, next));
       if (ref.disposed) return;
-      status.textContent = health.demo ? '已连接演示服务：仅使用预置字幕和译文。' : health.apiConfigured ? '服务已连接且模型已配置。实际开启时将验证翻译 API。' : '字幕服务已连接，尚未配置翻译模型，请填写本机 .env 后重启。';
+      if (next.provider === 'youtube') { assertTranslationReady(health, next.provider); status.textContent = 'YouTube 原生双语服务已连接，无需 API 或配对码。'; }
+      else status.textContent = health.demo ? '已连接 API 演示服务，并非真实翻译。' : health.apiConfigured ? '自定义 API 模型已配置。' : '自定义 API 尚未配置；也可直接选 YouTube 自带翻译。';
     } catch (error) { if (error.name !== 'AbortError') status.textContent = error.message; }
     finally { check.disabled = false; }
   });
@@ -164,14 +181,13 @@ class VideoCaptions {
     this.videoId = videoIdFromUrl(iframe.src); this.embedId = this.videoId;
     this.cues = []; this.translations = new Map(); this.epoch = 0;
     this.enabled = false; this.loading = false; this.time = 0; this.offset = 0;
-    this.lastAttempt = 0; this.previewUntil = 0;
+    this.lastAttempt = 0;
     this.surface = new VideoSurface(iframe, STYLE);
     for (const type of ['pointerdown', 'mousedown', 'click', 'keydown']) this.surface.scene.addEventListener(type, (event) => event.stopPropagation());
     this.surface.host.dataset.version = VERSION;
     this.surface.host.dataset.video = this.videoId;
     this.toggleButton = button('双语', () => {
-      if (this.previewUntil) { this.previewUntil = 0; this.render(); }
-      else if (this.enabled) this.turnOff(); else void this.turnOn();
+      if (this.enabled) this.turnOff(); else void this.turnOn();
     }, 'ryb-toggle');
     this.toggleButton.title = '在视频画面内显示原文和译文';
     this.optionsButton = button('⋯', () => openSettings(this), 'ryb-options');
@@ -215,7 +231,7 @@ class VideoCaptions {
   }
   async turnOn() {
     if (this.disposed || this.enabled) return;
-    if (!config.token) { openSettings(this); return; }
+    if (config.provider === 'api' && !config.token) { openSettings(this); return; }
     for (const video of videos.values()) if (video !== this) video.turnOff();
     this.turnOff();
     this.enabled = true; this.loading = true;
@@ -223,18 +239,25 @@ class VideoCaptions {
     this.startRequest = controller;
     this.notice('正在连接字幕服务…'); this.render();
     try {
-      const health = verifyHealth(await request('/health', undefined, controller.signal, cfg));
-      assertTranslationReady(health);
+      const native = cfg.provider === 'youtube';
+      if (!native || !this.cues.length) {
+        const health = verifyHealth(await request(native ? '/v1/youtube/health' : '/health', undefined, controller.signal, cfg));
+        assertTranslationReady(health, cfg.provider); this.demo = Boolean(health.demo);
+      } else this.demo = false;
       if (!this.cues.length) {
         this.notice(`正在获取 ${cfg.source} 原字幕…`);
-        const data = await request('/v1/captions', { videoId: this.videoId, language: cfg.source }, controller.signal, cfg);
+        const data = await request(native ? '/v1/youtube/captions' : '/v1/captions', { videoId: this.videoId, language: cfg.source }, controller.signal, cfg);
         if (this.disposed || epoch !== this.epoch || controller.signal.aborted) return;
-        if (data.videoId !== this.videoId || data.language !== cfg.source) throw new Error('字幕与当前视频或语言不匹配，请更新本机服务。');
+        if (data.videoId !== this.videoId || data.language !== cfg.source || native && data.demo) throw new Error('字幕来源与当前视频不匹配，请更新本机服务。');
         this.assignCues(normalizeCues(data.cues));
         this.demo = Boolean(data.demo);
-      } else this.demo = Boolean(health.demo);
+      }
       if (this.disposed || epoch !== this.epoch || controller.signal.aborted) return;
-      this.connect(); this.notice('字幕已载入，正在准备画面内译文…');
+      this.connect();
+      if (native) {
+        this.clock.setNativeTranslation(cfg.source, cfg.target);
+        this.notice('英文已载入。中文字幕由 YouTube 自带翻译提供；若未出现，请在播放器字幕菜单选择中文。', 6500);
+      } else this.notice('字幕已载入，正在准备 API 译文…');
     } catch (error) {
       if (error.name !== 'AbortError' && !controller.signal.aborted && epoch === this.epoch) { this.turnOff(); this.notice(error.message); }
     } finally {
@@ -242,34 +265,32 @@ class VideoCaptions {
     }
   }
   turnOff() {
-    this.epoch++; this.enabled = false; this.loading = false; this.previewUntil = 0;
+    this.epoch++; this.enabled = false; this.loading = false;
+    this.clock?.clearNativeTranslation();
     this.startRequest?.abort(); this.startRequest = null;
     this.translationRequest?.abort(); this.translationRequest = null;
     this.clearNotice(); this.render();
   }
-  preview() {
-    if (this.disposed) return;
-    this.turnOff(); this.previewUntil = Date.now() + 8000; this.render(); syncSurfaces();
-  }
   render() {
     if (!this.toggleButton || this.disposed) return;
-    const preview = this.previewUntil > Date.now();
-    if (!preview) this.previewUntil = 0;
-    this.toggleButton.textContent = preview ? '预览' : this.loading ? '加载中' : '双语';
-    this.toggleButton.setAttribute('aria-label', preview ? '关闭字幕样式预览' : this.enabled ? '关闭双语字幕' : '开启双语字幕');
-    this.toggleButton.setAttribute('aria-pressed', String(this.enabled || preview));
+    this.toggleButton.textContent = this.loading ? '加载中' : '双语';
+    this.toggleButton.setAttribute('aria-label', this.enabled ? '关闭双语字幕' : '开启双语字幕');
+    this.toggleButton.setAttribute('aria-pressed', String(this.enabled));
     this.toggleButton.setAttribute('aria-busy', String(this.loading));
     this.surface.host.dataset.enabled = String(this.enabled);
-    this.previewLabel.textContent = preview ? '样式预览 · 非视频字幕' : this.demo ? '演示预置字幕 · 非视频转录' : '';
+    this.previewLabel.textContent = this.demo ? 'API 演示预置字幕 · 非视频转录' : '';
+    this.surface.host.dataset.provider = config.provider;
     const index = activeCueIndex(this.cues, this.time - this.offset);
     const cue = this.cues[index];
-    const visible = preview || this.enabled && !this.loading && this.clock?.isSynchronized() && cue;
+    const visible = this.enabled && !this.loading && this.clock?.isSynchronized() && cue;
     this.caption.hidden = !visible;
-    this.source.textContent = preview ? 'Original subtitles stay on the video.' : visible ? cue.text : '';
-    this.target.textContent = preview ? '译文直接叠在视频画面里。' : visible ? this.translations.get(cue.id) || '译文加载中…' : '';
+    this.source.textContent = visible ? cue.text : '';
+    // YouTube renders the real target-language caption inside its iframe. Do not
+    // replace it with a placeholder, preview string, or an external AI response.
+    this.target.textContent = visible && config.provider === 'api' ? this.translations.get(cue.id) || '译文加载中…' : '';
   }
   async translateNear() {
-    if (!this.enabled || this.loading || this.disposed || this.translationRequest || document.hidden || !this.clock?.isSynchronized()) return;
+    if (config.provider !== 'api' || !this.enabled || this.loading || this.disposed || this.translationRequest || document.hidden || !this.clock?.isSynchronized()) return;
     this.lastAttempt = Date.now();
     const entries = translationWindow(this.cues, this.time - this.offset, this.translations);
     if (!entries.length) return;
@@ -294,7 +315,6 @@ class VideoCaptions {
 function syncSurfaces() {
   if (!active) return;
   for (const video of videos.values()) {
-    if (video.previewUntil && Date.now() >= video.previewUntil) video.render();
     video.surface.sync({ blocked: !!settings?.dialog.open, fontScale: config.fontScale, bottomRatio: config.bottomRatio });
   }
 }
@@ -311,7 +331,10 @@ function scan() {
 }
 function onload() {
   onunload(); active = true;
-  try { config = validateConfig({ ...DEFAULT_CONFIG, ...JSON.parse(sessionStorage.getItem(STORAGE_KEY) || '{}') }); } catch { config = { ...DEFAULT_CONFIG }; }
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(STORAGE_KEY) || '{}');
+    config = validateConfig({ ...DEFAULT_CONFIG, ...saved, provider: saved.provider });
+  } catch { config = { ...DEFAULT_CONFIG }; }
   observer = new MutationObserver((records) => {
     if (records.every((record) => record.target instanceof Element && record.target.closest('.ryb-surface-host,.ryb-settings-host'))) return;
     if (!scanTimer) scanTimer = setTimeout(() => { scanTimer = null; scan(); }, 100);

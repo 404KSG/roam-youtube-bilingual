@@ -3,7 +3,7 @@
 [hidden]{display:none!important}
 button,input,select{font:inherit}
 button{cursor:pointer}
-button:focus-visible,input:focus-visible,summary:focus-visible{outline:2px solid #9fc2ff;outline-offset:3px}
+button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:2px solid #9fc2ff;outline-offset:3px}
 .ryb-scene{position:absolute;inset:0;overflow:hidden;pointer-events:none;font-family:Arial,"PingFang SC",sans-serif;--ryb-size:22px;--ryb-bottom:40px;--ryb-control-top:52px}
 .ryb-controls{position:absolute;top:var(--ryb-control-top);right:12px;display:flex;align-items:center;border:1px solid #ffffff35;border-radius:6px;background:#101820b8;box-shadow:0 1px 5px #0003;overflow:hidden;pointer-events:auto;opacity:.7;transition:opacity .12s}
 .ryb-controls:hover,.ryb-controls:focus-within{opacity:1}
@@ -28,13 +28,12 @@ button:focus-visible,input:focus-visible,summary:focus-visible{outline:2px solid
 .ryb-muted{margin:8px 0;color:#62748a;font-size:12px;line-height:1.65}
 .ryb-setting-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 .ryb-field{display:flex;flex-direction:column;gap:5px;margin:12px 0;font-size:12px;min-width:0}
-.ryb-field input{display:block;width:100%;min-width:0;padding:8px 9px;border:1px solid #ced8e1;border-radius:4px;background:#fff;color:#27384b;font:13px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace}
+.ryb-field input,.ryb-field select{display:block;width:100%;min-width:0;padding:8px 9px;border:1px solid #ced8e1;border-radius:4px;background:#fff;color:#27384b;font:13px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace}
 .ryb-actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 0}
 .ryb-settings button{padding:6px 10px;border:1px solid #ced8e1;border-radius:4px;color:#27384b;background:#fff;line-height:1.5}
 .ryb-settings button:hover{background:#eaf0f6}
 .ryb-settings button:disabled{opacity:.5;cursor:wait}
 .ryb-settings .ryb-primary{background:#28649a;color:#fff;border-color:#28649a}
-.ryb-settings .ryb-preview-button{width:100%;margin:4px 0 6px;border:1px dashed #86a3bd;background:#edf3f8;font-size:12px}
 .ryb-setting-status{margin:12px 0 0;color:#8b3d24;font-size:12px;overflow-wrap:anywhere;min-height:1em}
 .ryb-advanced{border-top:1px solid #d4dde5;margin-top:14px;padding-top:12px}
 .ryb-advanced summary{cursor:pointer;color:#415a72;font-size:12px}

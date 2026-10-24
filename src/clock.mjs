@@ -1,4 +1,5 @@
 import { videoIdFromUrl } from './core.mjs';
+import { nativeCaptionTrack } from './protocol.mjs';
 
 // Share Roam's player without replacing it or installing a second YT.Player.
 // This iframe transport is not a stable public API; isolate it and fail closed.
@@ -25,6 +26,7 @@ export class YouTubeClock {
       if (!data || !['infoDelivery', 'initialDelivery', 'onReady', 'onStateChange'].includes(data.event)) return;
       this.ready = true;
       const info = data.info;
+      const wasPlaying = this.state === 1;
       let snapshot = this.currentTime();
       if (data.event === 'onStateChange' && Number.isFinite(info)) {
         this.time = snapshot; this.updated = now(); this.state = info;
@@ -50,6 +52,10 @@ export class YouTubeClock {
         this.setStatus('已连接播放器');
         if (this.pendingSeek !== null) { const target = this.pendingSeek; this.pendingSeek = null; this.seek(target); }
       }
+      if (!wasPlaying && this.state === 1 && this.nativeTrack && !this.nativePlaySeen) {
+        this.nativePlaySeen = true; this.nativeAttempts = 0; this.nativeLastAttempt = -Infinity;
+      }
+      this.applyNativeTranslation();
       this.onTime(this.currentTime());
     };
     this.listen = () => {
@@ -58,6 +64,7 @@ export class YouTubeClock {
     };
     this.loaded = () => {
       this.ready = false; this.hasTime = false; this.state = -1; this.lastTimeMessage = -Infinity;
+      this.nativeAttempts = 0; this.nativeLastAttempt = -Infinity; this.nativePlaySeen = false;
       this.setStatus('正在连接…'); this.listen();
     };
     window.addEventListener('message', this.message);
@@ -71,6 +78,7 @@ export class YouTubeClock {
     this.handshake = setInterval(() => { if (!this.isSynchronized()) this.listen(); }, 2000);
     this.timer = setInterval(() => {
       if (this.hasTime && !this.isSynchronized()) this.setStatus('播放时间信号中断，已暂停自动翻译；可点击重新连接。');
+      this.applyNativeTranslation();
       this.onTime(this.currentTime());
     }, 200);
     this.timeout = setTimeout(() => { if (!this.hasTime) this.setStatus('未收到播放时间。请先播放视频；若仍无响应，请重新连接。'); }, 12000);
@@ -78,6 +86,21 @@ export class YouTubeClock {
   setStatus(value) { if (this.status !== value) { this.status = value; this.onState(value); } }
   post(data) { if (!this.destroyed) this.iframe.contentWindow?.postMessage(JSON.stringify(data), this.origin); }
   command(func, args = []) { this.post({ event: 'command', func, args }); }
+  setNativeTranslation(source, target) {
+    this.nativeTrack = nativeCaptionTrack(source, target);
+    this.nativeAttempts = 0; this.nativeLastAttempt = -Infinity; this.nativePlaySeen = this.state === 1;
+    this.applyNativeTranslation();
+  }
+  clearNativeTranslation() { this.nativeTrack = null; }
+  applyNativeTranslation() {
+    // This is the same track-selection payload used by YouTube's own caption
+    // menu. It is an empirical adapter, not a documented/stable IFrame option.
+    // Chinese is fetched and rendered by YouTube, never translated by our API.
+    if (!this.nativeTrack || !this.hasTime || this.destroyed || this.nativeAttempts >= 3 || this.now() - this.nativeLastAttempt < 1500) return;
+    this.nativeLastAttempt = this.now(); this.nativeAttempts++;
+    this.command('loadModule', ['captions']);
+    this.command('setOption', ['captions', 'track', this.nativeTrack]);
+  }
   isSynchronized() {
     // Paused/ended/cued players need not emit periodic time packets.
     return !this.destroyed && this.hasTime && (this.state !== 1 || this.now() - this.lastTimeMessage < 5000);

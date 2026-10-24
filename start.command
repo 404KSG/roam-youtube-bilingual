@@ -14,8 +14,6 @@ if ! command -v node >/dev/null 2>&1; then
   read -r -p '按回车关闭。' unused_input
   exit 1
 fi
-if [ ! -f .env ]; then
-  (umask 077; cp .env.example .env)
-  echo '已创建 .env 空配置。字幕导入和获取可用；翻译前请填写 API 地址、Key、模型并重启。'
-fi
+echo '默认使用 YouTube 自带中文翻译，不需要 API Key、模型或配对码。'
+echo '本机服务只获取英文原字幕，启动后直接点击视频内“双语”。'
 npm start

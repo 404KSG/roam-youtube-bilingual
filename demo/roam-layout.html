@@ -19,7 +19,7 @@
   </style>
 </head>
 <body>
-<header>画面内双语字幕 · 0.3.0-beta.1 · 隔离验收，不包含用户笔记</header>
+<header>画面内双语字幕 · 0.4.0-beta.1 · YouTube 自带翻译，不包含用户笔记</header>
 <main>
   <div class="roam-main"><div class="roam-body-main"><div class="rm-video-theater">
     <div class="rm-iframe__spacing-wrapper rm-video-player__spacing-wrapper hoverparent rm-video-player__spacing-wrapper--theater">
@@ -27,7 +27,7 @@
       <div class="rm-video-player__theater-toolbar"><span>Roam 原生视频工具栏</span><button type="button">时间戳</button></div>
     </div>
   </div></div></div>
-  <aside><strong>字幕必须直接在视频画面内</strong><p>视频右上角点击“双语”开启；点击“⋯”配置 API 连接，或选择不调用 API 的样式预览。</p><p>原文在上、译文在下。下方不创建任何插件面板，原生视频大小和工具栏保持不变。</p><p class="fixture-note">本页保留 Roam 的原生比例容器与裁剪规则，用于验证普通、窄屏、侧栏和双语全屏布局。演示字幕始终有明确标识。</p></aside>
+  <aside><strong>字幕必须直接在视频画面内</strong><p>视频右上角点“双语”即可：YouTube 原生播放器显示中文自动翻译，插件同步叠加英文。默认无需 API Key、模型或配对码。</p><p>下方不创建插件面板。请保留 YouTube 原生 CC，它负责显示真正的中文。</p><p class="fixture-note">请用 npm start 启动正式服务；npm run demo 仅用于自定义 API 回归，不会冒充 YouTube 原生字幕。本页保留 Roam 的原生比例容器与裁剪规则。</p></aside>
 </main>
 <script src="/roam-youtube-bilingual.js"></script>
 </body>

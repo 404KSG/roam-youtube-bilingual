@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 import { fetchCaptions } from './captions.mjs';
@@ -66,12 +67,18 @@ export function makeServer({ token, port = 17321, demo = false, captionFetcher =
       } catch { json(404, { error: '文件不存在，请先运行 npm run build。' }); }
       return;
     }
-    if (!authorized(req.headers.authorization, token)) return json(401, { error: '本机服务配对码不正确。请从服务终端复制配对码。' });
+    // Public *read-only YouTube* routes do not expose files, credentials or the
+    // paid translator. Host + Origin checks above and JSON preflight still apply.
+    const nativeHealth = req.method === 'GET' && url.pathname === '/v1/youtube/health';
+    const nativeCaptions = req.method === 'POST' && url.pathname === '/v1/youtube/captions';
+    if (!nativeHealth && !nativeCaptions && !authorized(req.headers.authorization, token)) return json(401, { error: '本机服务配对码不正确。请从服务终端复制配对码。' });
     const controller = new AbortController();
     res.once('close', () => { if (!res.writableEnded) controller.abort(); });
     try {
+      if (nativeHealth) return json(200, { ok: true, service: SERVICE_ID, apiVersion: API_VERSION, version: VERSION, demo, provider: 'youtube-native', tokenRequired: false });
       if (req.method === 'GET' && url.pathname === '/health') return json(200, { ok: true, service: SERVICE_ID, apiVersion: API_VERSION, version: VERSION, demo, apiConfigured: Boolean(process.env.OPENAI_MODEL), provider: 'OpenAI-compatible Chat Completions' });
-      if (req.method === 'POST' && url.pathname === '/v1/captions') {
+      if (nativeCaptions || req.method === 'POST' && url.pathname === '/v1/captions') {
+        if (nativeCaptions && demo) return json(409, { error: '演示服务不提供真实 YouTube 字幕，请运行 npm start。' });
         const body = await readJSON(req);
         if (!/^[\w-]{11}$/.test(body?.videoId || '') || !/^[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})*$/.test(body?.language || 'en')) return json(400, { error: '视频 ID 或字幕语言无效。' });
         const key = `${body.videoId}:${body.language || 'en'}`;
@@ -112,6 +119,8 @@ export function makeServer({ token, port = 17321, demo = false, captionFetcher =
 }
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+  const envPath = resolve(root, '.env');
+  if (existsSync(envPath)) process.loadEnvFile(envPath);
   const port = Number(process.env.PORT || 17321);
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('PORT 必须在 1024–65535 之间。');
   const demo = process.argv.includes('--demo');
@@ -119,6 +128,6 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
   const server = makeServer({ token, port, demo });
   server.on('error', (error) => { console.error(error.code === 'EADDRINUSE' ? `端口 ${port} 已被占用，请更换 PORT。` : error.message); process.exitCode = 1; });
   server.listen(port, '127.0.0.1', () => {
-    console.log(`Roam 双语字幕 ${VERSION} ${demo ? '【演示：预置字幕与译文，无 API 调用】' : '本机服务'}\n地址：http://127.0.0.1:${port}\n配对码：${token}\nAPI Key 仅从本机环境配置读取，不发送到 Roam。按 Ctrl+C 停止。`);
+    console.log(`Roam 双语字幕 ${VERSION} ${demo ? '【仅供 API 回归的演示服务】' : 'YouTube 原生双语服务'}\n地址：http://127.0.0.1:${port}\nYouTube 模式无需 API Key、模型或配对码。中文由 YouTube 播放器提供，本服务只获取原文字幕。\n${process.env.OPENAI_MODEL ? `可选 API 模式配对码：${token}\n` : ''}按 Ctrl+C 停止；不会设置开机启动。`);
   });
 }
