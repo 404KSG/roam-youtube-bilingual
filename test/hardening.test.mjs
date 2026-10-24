@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizeCues, parseJSON3, parseSubtitles } from '../src/core.mjs';
-import { createTranslator, parseModelResponse } from '../server/translator.mjs';
 import { YouTubeClock } from '../src/clock.mjs';
 
 test('normalization is idempotent and preserves literal angle brackets across the bridge', () => {
@@ -17,15 +16,6 @@ test('simultaneous source cues are retained instead of silently discarding one s
 test('invalid time fields and malformed JSON3 entries fail safely', () => {
   assert.throws(() => parseSubtitles('WEBVTT\n\n00:67.000 --> 01:10.000\nBad'), /时间轴/);
   assert.deepEqual(parseJSON3({ events: [null, {}, { tStartMs: 0, dDurationMs: 1000, segs: [null, { utf8: 'Valid' }] }] }), [{ id: 0, start: 0, end: 1, text: 'Valid' }]);
-});
-test('non-JSON and oversized provider bodies never leak raw response contents', async () => {
-  const config = { baseUrl: 'https://provider.example/v1', apiKey: 'test-key', model: 'test-model' };
-  const body = { target: 'zh-CN', entries: [{ id: 1, text: 'Hello' }] };
-  const malformed = createTranslator({ ...config, fetchImpl: async () => new Response('private-provider-debug-secret', { status: 200 }) });
-  await assert.rejects(malformed.translate(body), (error) => !error.message.includes('private-provider') && /JSON/.test(error.message));
-  const oversized = createTranslator({ ...config, fetchImpl: async () => new Response('x'.repeat(600000), { status: 200 }) });
-  await assert.rejects(oversized.translate(body), /过大/);
-  assert.throws(() => parseModelResponse('null', body.entries), /格式|完整/);
 });
 
 function withClock(callback) {

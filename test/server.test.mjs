@@ -1,69 +1,55 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeServer } from '../server/index.mjs';
-
-const token = 'test-only-pairing-token';
+const id = 'vif8NQcjVf0';
+const info = { videoId: id, title: 'Test video', sourceLanguage: 'en', playerSourceLanguage: 'en', languages: [{ code: 'zh-Hans', name: 'Chinese' }, { code: 'ja', name: 'Japanese' }] };
 async function fixture(t, options = {}) {
-  const server = makeServer({ token, ...options });
+  const server = makeServer({ infoFetcher: async () => info, captionFetcher: async () => [{ id: 0, start: 0, end: 2, text: 'English' }], verifyPeer: async () => {}, captionReader: { read: async () => ({ matched: true, text: '翻译', bounds: { left: .3, top: .9, width: .4, height: .07 }, sampledAt: Date.now() }) }, ...options });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); }));
   return `http://127.0.0.1:${server.address().port}`;
 }
-function options(body, headers = {}) {
-  return { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) };
-}
-test('authenticated health never contains credentials; wrong token is rejected', async (t) => {
+const post = (body, origin = 'https://roamresearch.com') => ({ method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+const frame = { x: 100, y: 100, width: 800, height: 450 };
+test('health describes compact bridge without models, tokens or API configuration', async (t) => {
+  const base = await fixture(t); const data = await (await fetch(base + '/v1/youtube/health')).json();
+  assert.equal(data.provider, 'youtube-unified'); assert.equal(data.apiVersion, 2);
+  assert.equal('apiConfigured' in data, false); assert.equal('token' in data, false);
+});
+test('language metadata and original captions are bounded and cached', async (t) => {
+  let infos = 0, captions = 0;
+  const base = await fixture(t, { infoFetcher: async () => { infos++; return info; }, captionFetcher: async () => { captions++; return [{ id: 0, start: 0, end: 1, text: 'Original' }]; } });
+  const metadata = await (await fetch(base + '/v1/youtube/video-info', post({ videoId: id }))).json();
+  assert.equal(metadata.languages[1].code, 'ja');
+  for (let i = 0; i < 2; i++) assert.equal((await fetch(base + '/v1/youtube/captions', post({ videoId: id }))).status, 200);
+  assert.equal(infos, 1); assert.equal(captions, 1);
+});
+test('caption-state requires same-user verification and exact requested scope', async (t) => {
+  let verified = false, read = false;
+  const base = await fixture(t, { verifyPeer: async (socket) => { assert.ok(socket.remotePort); verified = true; }, captionReader: { read: async ({ title, target }) => { assert.equal(verified, true); read = true; assert.equal(title, info.title); assert.equal(target, 'ja'); return { matched: true, text: '字幕です。', sampledAt: Date.now(), bounds: { left: .3, top: .9, width: .4, height: .07 } }; } } });
+  await fetch(base + '/v1/youtube/video-info', post({ videoId: id }));
+  const data = await (await fetch(base + '/v1/youtube/caption-state', post({ videoId: id, target: 'ja', frame }))).json();
+  assert.equal(data.text, '字幕です。'); assert.equal(read, true);
+  assert.equal((await fetch(base + '/v1/youtube/caption-state', post({ videoId: id, target: 'ja', frame, pid: 1 }))).status, 400);
+  assert.equal((await fetch(base + '/v1/youtube/caption-state', post({ videoId: id, target: 'de', frame }))).status, 400);
+});
+test('untrusted peers and origins cannot read any accessibility data', async (t) => {
+  let reads = 0;
+  const base = await fixture(t, { verifyPeer: async () => { throw Object.assign(new Error('Denied'), { status: 403 }); }, captionReader: { read: () => { reads++; } } });
+  assert.equal((await fetch(base + '/v1/youtube/caption-state', post({ videoId: id, target: 'ja', frame }))).status, 403);
+  assert.equal((await fetch(base + '/v1/youtube/video-info', post({ videoId: id }, 'https://evil.example'))).status, 403);
+  assert.equal(reads, 0);
+});
+test('removed AI routes, credentials and arbitrary files are not exposed', async (t) => {
   const base = await fixture(t);
-  assert.equal((await fetch(`${base}/health`)).status, 401);
-  const response = await fetch(`${base}/health`, { headers: { Authorization: `Bearer ${token}` } });
-  const text = await response.text();
-  assert.equal(response.status, 200);
-  assert.equal(text.includes(token), false);
-  assert.equal(text.includes('OPENAI_API_KEY'), false);
+  assert.equal((await fetch(base + '/v1/translate', post({ entries: [] }))).status, 404);
+  for (const path of ['/.env', '/server/caption-reader.mjs', '/../README.md']) assert.equal((await fetch(base + path)).status, 404);
+  assert.equal((await fetch(base + '/v1/youtube/captions', post({ videoId: 'file:///private' }))).status, 400);
 });
-test('untrusted origins and DNS-rebinding Host are rejected, Roam preflight is allowed', async (t) => {
+test('size, content type and private-network preflight guards remain active', async (t) => {
   const base = await fixture(t);
-  assert.equal((await fetch(`${base}/health`, { headers: { Origin: 'https://evil.example', Authorization: `Bearer ${token}` } })).status, 403);
-  const response = await fetch(`${base}/v1/translate`, { method: 'OPTIONS', headers: { Origin: 'https://roamresearch.com', 'Access-Control-Request-Private-Network': 'true' } });
-  assert.equal(response.status, 204);
-  assert.equal(response.headers.get('Access-Control-Allow-Origin'), 'https://roamresearch.com');
-  assert.equal(response.headers.get('Access-Control-Allow-Private-Network'), 'true');
-  const { request } = await import('node:http');
-  const hostStatus = await new Promise((resolve) => { const req = request(base + '/health', { headers: { Host: 'evil.example' } }, (res) => { res.resume(); resolve(res.statusCode); }); req.end(); });
-  assert.equal(hostStatus, 403);
-});
-test('caption requests validate input and cache by video plus source language', async (t) => {
-  let calls = 0;
-  const base = await fixture(t, { captionFetcher: async () => { calls++; return [{ id: 0, start: 0, end: 2, text: 'Hello' }]; } });
-  assert.equal((await fetch(`${base}/v1/captions`, options({ videoId: '$(touch /tmp/unsafe)' }))).status, 400);
-  for (let i = 0; i < 2; i++) {
-    const response = await fetch(`${base}/v1/captions`, options({ videoId: 'M7lc1UVf-VE', language: 'en' }));
-    assert.equal(response.status, 200);
-    assert.equal((await response.json()).source, 'youtube');
-  }
-  assert.equal(calls, 1);
-});
-test('oversized and non-JSON requests fail before provider calls', async (t) => {
-  let calls = 0;
-  const base = await fixture(t, { translator: { translate: () => { calls++; } } });
-  const oversized = await fetch(`${base}/v1/translate`, options({ x: 'x'.repeat(65536) }));
-  assert.equal(oversized.status, 413);
-  const wrongType = await fetch(`${base}/v1/translate`, options({}, { 'Content-Type': 'text/plain' }));
-  assert.equal(wrongType.status, 415);
-  assert.equal(calls, 0);
-});
-test('demo is explicitly marked and uses only fixture data', async (t) => {
-  const base = await fixture(t, { demo: true, captionFetcher: () => { throw new Error('must not use YouTube'); }, translator: { translate: () => { throw new Error('must not use API'); } } });
-  const captions = await (await fetch(`${base}/v1/captions`, options({ videoId: 'M7lc1UVf-VE', language: 'en' }))).json();
-  assert.equal(captions.demo, true);
-  assert.equal(captions.source, 'demo-fixture');
-  const translated = await (await fetch(`${base}/v1/translate`, options({ entries: captions.cues.map(({ id, text }) => ({ id, text })), target: 'zh-CN' }))).json();
-  assert.equal(translated.demo, true);
-  assert.equal(translated.translations[0].text, '好用的工具，应该帮助你专注于想法本身。');
-});
-test('static assets work without authentication and cannot read .env or escape the root', async (t) => {
-  const base = await fixture(t);
-  assert.equal((await fetch(`${base}/demo`)).status, 200);
-  assert.equal((await fetch(`${base}/.env`)).status, 401);
-  assert.equal((await fetch(`${base}/server/index.mjs`)).status, 401);
+  assert.equal((await fetch(base + '/v1/youtube/video-info', post({ x: 'x'.repeat(65536) }))).status, 413);
+  assert.equal((await fetch(base + '/v1/youtube/video-info', { ...post({ videoId: id }), headers: { 'Content-Type': 'text/plain' } })).status, 415);
+  const response = await fetch(base + '/v1/youtube/caption-state', { method: 'OPTIONS', headers: { Origin: 'https://roamresearch.com', 'Access-Control-Request-Private-Network': 'true' } });
+  assert.equal(response.status, 204); assert.equal(response.headers.get('Access-Control-Allow-Private-Network'), 'true');
 });

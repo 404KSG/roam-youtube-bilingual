@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { videoIdFromUrl, parseSubtitles, parseJSON3, normalizeCues, activeCueIndex, translationWindow, validateTranslations, exportMarkdown, decodeText } from '../src/core.mjs';
+import { videoIdFromUrl, parseSubtitles, parseJSON3, normalizeCues, activeCueIndex, decodeText } from '../src/core.mjs';
 
 test('only trusted YouTube hosts and valid video IDs are accepted', () => {
   for (const url of ['https://www.youtube.com/embed/M7lc1UVf-VE?start=10', 'https://youtu.be/M7lc1UVf-VE', 'https://www.youtube-nocookie.com/embed/M7lc1UVf-VE', 'https://m.youtube.com/watch?v=M7lc1UVf-VE']) assert.equal(videoIdFromUrl(url), 'M7lc1UVf-VE');
@@ -33,20 +33,4 @@ test('invalid or oversized imports fail with actionable errors', () => {
   assert.throws(() => parseSubtitles('x'.repeat(5 * 1024 * 1024 + 1)), /5 MB/);
   assert.throws(() => parseSubtitles('{"events":[]}'), /时间轴/);
   assert.equal(decodeText('&#x1f600; &#1114112; &lt;hello&gt;'), '😀 <hello>');
-});
-test('lookahead selects current/nearby uncached cues, including after a seek', () => {
-  const cues = Array.from({ length: 200 }, (_, id) => ({ id, start: id * 5, end: id * 5 + 4, text: `caption ${id}` }));
-  const result = translationWindow(cues, 500, new Map([[100, 'done']]));
-  assert.equal(result[0].id, 101);
-  assert.ok(result.every((c) => c.id <= 118));
-  assert.ok(result.length <= 24);
-  assert.equal(translationWindow(cues, 0, new Map()).length, 19);
-});
-test('incomplete, duplicated and renumbered model responses are rejected', () => {
-  const entries = [{ id: 20, text: 'A' }, { id: 21, text: 'B' }];
-  for (const result of [[{ id: 20, text: '甲' }], [{ id: 20, text: '甲' }, { id: 20, text: '乙' }], [{ id: 0, text: '甲' }, { id: 1, text: '乙' }]]) assert.throws(() => validateTranslations(result, entries));
-  assert.deepEqual(validateTranslations([{ id: 21, text: ' 乙 ' }, { id: 20, text: '甲' }], entries)[0], { id: 21, text: '乙' });
-});
-test('export retains source, translation and timestamp links', () => {
-  assert.equal(exportMarkdown([{ id: 9, start: 125, text: 'Original' }], new Map([[9, '原文']]), 'M7lc1UVf-VE'), '- [02:05](https://www.youtube.com/watch?v=M7lc1UVf-VE&t=125s) Original\n  - 原文');
 });

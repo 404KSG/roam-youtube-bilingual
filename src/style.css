@@ -1,42 +1,15 @@
 :host{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;color-scheme:light}
-*,*::before,*::after{box-sizing:border-box}
-[hidden]{display:none!important}
-button,input,select{font:inherit}
-button{cursor:pointer}
-button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:2px solid #9fc2ff;outline-offset:3px}
-.ryb-scene{position:absolute;inset:0;overflow:hidden;pointer-events:none;font-family:Arial,"PingFang SC",sans-serif;--ryb-size:22px;--ryb-bottom:40px;--ryb-control-top:52px}
-.ryb-controls{position:absolute;top:var(--ryb-control-top);right:12px;display:flex;align-items:center;border:1px solid #ffffff35;border-radius:6px;background:#101820b8;box-shadow:0 1px 5px #0003;overflow:hidden;pointer-events:auto;opacity:.7;transition:opacity .12s}
-.ryb-controls:hover,.ryb-controls:focus-within{opacity:1}
-.ryb-controls button{border:0;background:transparent;color:#fff;line-height:1;padding:8px 10px;font-size:12px;min-height:30px;white-space:nowrap}
-.ryb-controls .ryb-toggle{display:flex;align-items:center;gap:6px}
-.ryb-toggle::before{content:"";width:5px;height:5px;flex:none;border-radius:50%;background:#b9c1c9}
-.ryb-toggle[aria-pressed="true"]::before{background:#8ce0be;box-shadow:0 0 5px #8ce0be55}
-.ryb-toggle[aria-busy="true"]::before{background:#f1d08b}
-.ryb-controls button:hover{background:#ffffff15}
-.ryb-controls .ryb-options{border-left:1px solid #ffffff24;padding:6px 8px;font-size:18px}
-.ryb-captions{position:absolute;left:4%;right:4%;bottom:var(--ryb-bottom);max-height:65%;display:flex;flex-direction:column;align-items:center;gap:3px;text-align:center;overflow:hidden;font-size:var(--ryb-size);line-height:1.4;text-shadow:0 1px 2px #000;pointer-events:none}
-.ryb-source,.ryb-target{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;max-width:100%;overflow:hidden;white-space:pre-line;overflow-wrap:anywhere;border-radius:3px;padding:2px 7px;background:#0b1017d9;margin:0;}
-.ryb-source{font-size:.8em;font-weight:400;color:#e0e7ef}
-.ryb-target{font-size:1em;font-weight:600;color:#fff}
-.ryb-source:empty,.ryb-target:empty,.ryb-preview-label:empty{display:none}
-.ryb-preview-label{font:10px/1.4 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;color:#ffe6b1;background:#262019df;padding:2px 6px;border-radius:3px;text-shadow:none}
-.ryb-notice{position:absolute;right:12px;top:calc(var(--ryb-control-top) + 38px);max-width:min(340px,calc(100% - 24px));display:flex;gap:8px;align-items:flex-start;border:1px solid #ffffff30;border-radius:6px;padding:9px 10px;color:#f5f7fa;background:#101820ec;font:12px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;overflow-wrap:anywhere;pointer-events:none}
-.ryb-dismiss{padding:0;border:0;color:#fff;background:none;font:17px/1 Arial,sans-serif;pointer-events:auto}
-.ryb-settings{pointer-events:auto;width:min(520px,calc(100vw - 32px));max-height:90vh;overflow:auto;margin:auto;padding:24px;border:1px solid #d4dde5;border-radius:10px;background:#f8fafc;color:#27384b;font:13px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;box-shadow:0 18px 70px #0005;text-align:left}
-.ryb-settings::backdrop{background:#0b14206b}
-.ryb-settings h2{margin:0 0 8px;font-size:20px;font-weight:650;line-height:1.4}
-.ryb-muted{margin:8px 0;color:#62748a;font-size:12px;line-height:1.65}
-.ryb-setting-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-.ryb-field{display:flex;flex-direction:column;gap:5px;margin:12px 0;font-size:12px;min-width:0}
-.ryb-field input,.ryb-field select{display:block;width:100%;min-width:0;padding:8px 9px;border:1px solid #ced8e1;border-radius:4px;background:#fff;color:#27384b;font:13px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace}
-.ryb-actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 0}
-.ryb-settings button{padding:6px 10px;border:1px solid #ced8e1;border-radius:4px;color:#27384b;background:#fff;line-height:1.5}
-.ryb-settings button:hover{background:#eaf0f6}
-.ryb-settings button:disabled{opacity:.5;cursor:wait}
-.ryb-settings .ryb-primary{background:#28649a;color:#fff;border-color:#28649a}
-.ryb-setting-status{margin:12px 0 0;color:#8b3d24;font-size:12px;overflow-wrap:anywhere;min-height:1em}
-.ryb-advanced{border-top:1px solid #d4dde5;margin-top:14px;padding-top:12px}
-.ryb-advanced summary{cursor:pointer;color:#415a72;font-size:12px}
-.ryb-file{display:none!important}
-@media(max-width:420px){.ryb-settings{padding:18px}.ryb-setting-grid{grid-template-columns:1fr;gap:0}}
-@media(prefers-reduced-motion:reduce){.ryb-controls{transition:none}}
+*,*::before,*::after{box-sizing:border-box}[hidden]{display:none!important}
+button,input,select{font:inherit}button{cursor:pointer}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #287db4;outline-offset:3px}
+.ryb-scene{position:absolute;inset:0;overflow:hidden;pointer-events:none;font-family:Arial,"PingFang SC",sans-serif}
+.ryb-caption-box{position:absolute;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;padding:5px 12px;border-radius:4px;background:#090c10;color:#fff;text-align:center;overflow:hidden;pointer-events:none;font-family:Arial,"PingFang SC",sans-serif;font-weight:400}
+.ryb-line{flex:none;display:block;max-width:100%;margin:0;padding:0;background:transparent;white-space:nowrap;line-height:1.25;font-size:inherit;font-weight:400;text-align:center;text-shadow:none}
+.ryb-source{color:#edf1f6}.ryb-target{color:#fff}
+.ryb-notice{position:absolute;right:12px;top:12px;max-width:min(340px,calc(100% - 24px));padding:8px 10px;border:1px solid #ffffff28;border-radius:5px;background:#101820ec;color:#f5f7fa;font:12px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;overflow-wrap:anywhere}
+.ryb-settings{pointer-events:auto;width:min(330px,calc(100vw - 32px));max-height:90vh;overflow:auto;margin:auto;padding:20px;border:1px solid #d4dde5;border-radius:9px;background:#fbfcfd;color:#27384b;font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;box-shadow:0 16px 65px #0004;text-align:left}
+.ryb-settings::backdrop{background:#0b14204d}.ryb-settings h2{margin:0 0 18px;font-size:18px;font-weight:600}
+.ryb-toggle-row{display:flex;align-items:center;justify-content:space-between;padding-bottom:14px;border-bottom:1px solid #e1e7ed;cursor:pointer}.ryb-toggle-row input{width:16px;height:16px;accent-color:#287db4}
+.ryb-field{display:flex;flex-direction:column;gap:9px;margin:16px 0;min-width:0}.ryb-field select{width:100%;padding:7px 8px;border:1px solid #ccd7e1;border-radius:4px;background:#fff;color:#27384b}.ryb-field input[type=range]{display:block;width:100%;margin:2px 0;accent-color:#287db4}
+.ryb-hint{font-size:11px;line-height:1.5;color:#728295;margin:0}.ryb-status{font-size:12px;color:#964b28;overflow-wrap:anywhere;margin:10px 0 0}.ryb-status:empty{display:none}
+.ryb-settings-footer{display:flex;justify-content:flex-end;margin-top:18px}.ryb-primary{border:0;border-radius:4px;background:#287db4;color:#fff;padding:6px 16px;font-size:13px}

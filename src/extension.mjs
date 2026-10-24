@@ -1,357 +1,273 @@
-import { MAX_SUBTITLE_BYTES, videoIdFromUrl, parseSubtitles, normalizeCues, activeCueIndex, formatTime, translationWindow, validateTranslations } from './core.mjs';
+import { videoIdFromUrl, normalizeCues, activeCueIndex } from './core.mjs';
 import { YouTubeClock } from './clock.mjs';
 import { VideoSurface } from './surface.mjs';
-import { VERSION, DEFAULT_CONFIG, validateConfig, configChange, verifyHealth } from './protocol.mjs';
+import { VERSION, SERVICE_URL, DEFAULT_CONFIG, validateConfig, verifyHealth, singleLine, fittedFontSize } from './protocol.mjs';
 
 const STORAGE_KEY = 'roam-youtube-bilingual/session/v1';
-const commandLabel = 'YouTube 双语字幕：连接与设置';
+const commandLabel = 'YouTube 双语字幕：设置';
+const fullscreenCommand = 'YouTube 双语字幕：双语全屏';
 const videos = new Map();
 let config = { ...DEFAULT_CONFIG };
-let active = false;
-let observer, scanTimer, surfaceTimer, settings;
+let active = false, observer, scanTimer, surfaceTimer, settings, globalStyle;
 let commandRegistered = false;
-
-function element(tag, className, text) {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
-function button(text, callback, className = '') {
-  const node = element('button', className, text); node.type = 'button';
-  node.addEventListener('click', callback); return node;
-}
+const el = (tag, cls, text) => { const node = document.createElement(tag); if (cls) node.className = cls; if (text !== undefined) node.textContent = text; return node; };
+const button = (text, callback, cls = '') => { const node = el('button', cls, text); node.type = 'button'; node.addEventListener('click', callback); return node; };
 function saveConfig(next) {
-  const change = configChange(config, next);
-  const serviceChanged = config.service !== next.service;
-  config = next;
-  try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(config)); } catch { /* Session-only storage is optional. */ }
+  const old = config; config = validateConfig(next);
+  try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(config)); } catch { /* Optional session storage. */ }
   for (const video of videos.values()) {
-    if (change !== 'display') {
-      video.turnOff();
-      if (change === 'source' || serviceChanged || change === 'provider') video.cues = [];
-      if (change === 'source' || change === 'translation' || change === 'provider') video.translations.clear();
-      video.render();
-    }
+    if (old.target !== config.target) video.changeTarget();
+    else video.drawPair();
   }
-  syncSurfaces();
 }
-async function request(path, body, signal, cfg = config) {
-  const nativeRequest = path.startsWith('/v1/youtube/');
-  if (!nativeRequest && !cfg.token) throw new Error('自定义 API 模式需要本机服务配对码；YouTube 模式不需要。');
+async function request(path, body, signal) {
   let response;
   try {
-    response = await fetch(`${cfg.service}${path}`, {
-      method: body === undefined ? 'GET' : 'POST', mode: 'cors', credentials: 'omit',
-      headers: { ...(!nativeRequest ? { Authorization: `Bearer ${cfg.token}` } : {}), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      signal: AbortSignal.any([signal || new AbortController().signal, AbortSignal.timeout(90000)]),
+    response = await fetch(`${SERVICE_URL}${path}`, {
+      method: body ? 'POST' : 'GET', credentials: 'omit',
+      headers: body ? { 'Content-Type': 'application/json' } : {},
+      ...(body ? { body: JSON.stringify(body) } : {}),
+      signal: AbortSignal.any([signal || new AbortController().signal, AbortSignal.timeout(path.endsWith('caption-state') ? 3500 : 90000)]),
     });
   } catch (error) {
     if (signal?.aborted || error.name === 'AbortError') throw new DOMException('Aborted', 'AbortError');
-    if (error.name === 'TimeoutError') throw new Error('字幕请求超时，请稍后重试。');
-    throw new Error(nativeRequest ? '本机原字幕服务未连接。请先运行 start.command；YouTube 模式不需要 API Key 或配对码。' : '无法连接本机服务，请运行 start.command 并检查 API 模式配对码。');
+    throw new Error('本机字幕桥未连接，请运行新版 start.command。');
   }
   let data;
-  try { data = await response.json(); }
-  catch { if (signal?.aborted) throw new DOMException('Aborted', 'AbortError'); throw new Error('本机服务响应无效，请确认端口。'); }
-  if (!response.ok) {
-    if (nativeRequest && [401, 404].includes(response.status)) throw new Error('本机服务可能仍是旧版，请重启 start.command。YouTube 模式不需要配对码。');
-    throw new Error(data?.error || `本机服务返回 HTTP ${response.status}`);
-  }
+  try { data = await response.json(); } catch { throw new Error('本机字幕服务响应无效。'); }
+  if (!response.ok) throw new Error(data?.error || `字幕服务返回 HTTP ${response.status}`);
   return data;
 }
-function assertTranslationReady(health, provider) {
-  if (provider === 'youtube') {
-    if (health.demo || health.provider !== 'youtube-native') throw new Error('请运行正式的 npm start，而不是演示服务。YouTube 模式不需要 API。');
-  } else if (!health.demo && !health.apiConfigured) throw new Error('自定义 API 尚未配置。可以改用默认的“YouTube 自带翻译”，无需 Key。');
+function languageName(language) {
+  try { return new Intl.DisplayNames(['zh-CN'], { type: 'language' }).of(language.code) || language.name; } catch { return language.name; }
 }
-function disposeSettings(ref) {
-  if (!ref || ref.disposed) return;
-  ref.disposed = true; ref.request?.abort();
-  if (ref.dialog.open) ref.dialog.close();
-  ref.host.remove();
+function closeSettings(ref = settings) {
+  if (!ref || ref.closed) return;
+  ref.closed = true; ref.abort.abort();
+  if (ref.dialog.open) ref.dialog.close(); ref.host.remove();
   if (settings === ref) settings = null;
-  syncSurfaces();
+  if (!ref.owner.disposed) { ref.owner.toolbarButton.setAttribute('aria-expanded', 'false'); if (active) ref.owner.sync(); }
 }
-function openSettings(owner = null) {
+function openSettings(owner) {
+  if (!owner || owner.disposed) return;
   if (settings) { settings.dialog.focus(); return; }
-  const host = element('div', 'ryb-settings-host');
-  host.style.cssText = 'position:fixed!important;inset:0!important;pointer-events:none!important;z-index:2147483647!important;';
-  const shadow = host.attachShadow({ mode: 'open' });
-  const sheet = element('style'); sheet.textContent = STYLE;
-  const dialog = element('dialog', 'ryb-settings');
-  for (const type of ['pointerdown', 'mousedown', 'click', 'keydown']) dialog.addEventListener(type, (event) => event.stopPropagation());
-  const ref = { host, dialog, owner, disposed: false };
-  settings = ref;
-  dialog.addEventListener('close', () => disposeSettings(ref));
-  const form = element('form'); form.method = 'dialog';
-  form.addEventListener('submit', (event) => event.preventDefault());
-  form.append(element('h2', '', '视频内双语字幕'), element('p', 'ryb-muted', `${VERSION} · 原文与译文只显示在视频画面内，不在下方创建面板。`));
-  const fields = {};
-  const providerLabel = element('label', 'ryb-field');
-  providerLabel.append(element('span', '', '翻译来源'));
-  const provider = element('select'); provider.name = 'provider';
-  for (const [value, text] of [['youtube', 'YouTube 自带翻译（默认，无需 API）'], ['api', '自定义 API（可选）']]) {
-    const option = element('option', '', text); option.value = value; provider.append(option);
-  }
-  provider.value = config.provider; fields.provider = provider;
-  providerLabel.append(provider); form.append(providerLabel);
-  function field(key, label, type = 'text', options = {}) {
-    const wrapper = element('label', 'ryb-field'); wrapper.append(element('span', '', label));
-    const input = element('input'); input.name = key; input.type = type;
-    input.value = options.value ?? config[key]; input.autocomplete = 'off'; input.spellcheck = false;
-    for (const name of ['min', 'max', 'step']) if (options[name] !== undefined) input[name] = options[name];
-    fields[key] = input; wrapper.append(input); return wrapper;
-  }
-  const appearance = element('div', 'ryb-setting-grid');
-  appearance.append(field('fontScale', '字幕大小（1 为默认）', 'number', { min: '0.75', max: '1.6', step: '0.05' }), field('bottomRatio', '英文距底部比例（YouTube 默认 0.18）', 'number', { min: '0.02', max: '0.25', step: '0.01' }));
-  form.append(appearance);
-  const status = element('p', 'ryb-setting-status'); status.setAttribute('role', 'status');
-  const readValues = () => validateConfig({ ...Object.fromEntries(Object.entries(fields).filter(([key]) => key !== 'offset').map(([key, input]) => [key, input.value.trim()])) });
-  const apply = () => {
-    const next = readValues(); saveConfig(next);
-    if (owner && !owner.disposed && fields.offset) { owner.offset = Math.max(-3600, Math.min(3600, Number(fields.offset.value) || 0)); owner.render(); }
-    return next;
-  };
-  const languages = element('div', 'ryb-setting-grid');
-  languages.append(field('source', '原字幕语言，例如 en'), field('target', '译文语言，例如 zh-CN'));
-  form.append(languages, field('service', '本机原字幕服务地址'));
-  const nativeHelp = element('p', 'ryb-muted', '中文由 YouTube 播放器自带翻译显示，插件只同步叠加英文。无需 API Key、模型或配对码。本机服务仅用于获取原文字幕。');
-  const apiBox = element('div', 'ryb-api-config');
-  apiBox.append(field('token', 'API 模式配对码（不是 API Key）', 'password'), element('p', 'ryb-muted', '仅自定义 API 模式需要本机 .env 中的 Key 和模型。原字幕会发送到你配置的供应商，并可能产生费用。'));
-  const updateProviderUI = () => { apiBox.hidden = provider.value !== 'api'; nativeHelp.hidden = provider.value !== 'youtube'; };
-  provider.addEventListener('change', () => {
-    if ([0.08, 0.18].includes(Number(fields.bottomRatio.value))) fields.bottomRatio.value = provider.value === 'youtube' ? '0.18' : '0.08';
-    updateProviderUI();
-  });
-  updateProviderUI(); form.append(nativeHelp, apiBox);
-  if (owner) {
-    const advanced = element('details', 'ryb-advanced');
-    advanced.append(element('summary', '', '字幕文件、同步与全屏'));
-    const input = element('input', 'ryb-file'); input.type = 'file'; input.accept = '.srt,.vtt,.json,.json3'; input.setAttribute('aria-label', '选择字幕文件');
-    input.addEventListener('change', async () => {
-      const file = input.files?.[0]; if (!file) return;
-      const importId = ref.importId = (ref.importId || 0) + 1;
-      try {
-        if (file.size > MAX_SUBTITLE_BYTES) throw new Error('字幕文件须小于 5 MB。');
-        const cues = parseSubtitles(await file.text());
-        if (ref.disposed || owner.disposed || ref.importId !== importId) return;
-        owner.turnOff(); owner.assignCues(cues);
-        status.textContent = `已导入 ${cues.length} 条字幕。点击“保存并开启双语”开始翻译。`;
-      } catch (error) { status.textContent = error.message; }
-      finally { input.value = ''; }
-    });
-    const actions = element('div', 'ryb-actions');
-    actions.append(button('导入 SRT / VTT', () => input.click()), button('重新获取字幕', () => { owner.turnOff(); owner.cues = []; owner.translations.clear(); status.textContent = '已清除本视频缓存，下次开启时重新获取字幕。'; }));
-    const full = button('双语全屏', () => {
-      disposeSettings(ref);
-      void owner.surface.toggleFullscreen().catch((error) => owner.notice(error.message));
-    });
-    actions.append(full);
-    advanced.append(actions, input, field('offset', '时间偏移（正数让字幕延后，秒）', 'number', { min: '-3600', max: '3600', step: '0.5', value: String(owner.offset) }), element('p', 'ryb-muted', `已载入 ${owner.cues.length} 条原文，当前 ${formatTime(owner.time)}。YouTube 模式需要保留原生 CC，它负责显示中文；关闭“双语”仅收起英文。如果未自动切换，请在 YouTube 字幕菜单选择自动翻译→中文。保持两种字幕的全屏请用上方“双语全屏”。`));
-    form.append(advanced);
-  }
-  const actions = element('div', 'ryb-actions');
-  const check = button('检查连接', async () => {
-    check.disabled = true;
-    try {
-      const next = readValues(); ref.request?.abort(); ref.request = new AbortController();
-      const health = verifyHealth(await request(next.provider === 'youtube' ? '/v1/youtube/health' : '/health', undefined, ref.request.signal, next));
-      if (ref.disposed) return;
-      if (next.provider === 'youtube') { assertTranslationReady(health, next.provider); status.textContent = 'YouTube 原生双语服务已连接，无需 API 或配对码。'; }
-      else status.textContent = health.demo ? '已连接 API 演示服务，并非真实翻译。' : health.apiConfigured ? '自定义 API 模型已配置。' : '自定义 API 尚未配置；也可直接选 YouTube 自带翻译。';
-    } catch (error) { if (error.name !== 'AbortError') status.textContent = error.message; }
-    finally { check.disabled = false; }
-  });
-  const start = button(owner ? '保存并开启双语' : '保存设置', () => {
-    try { apply(); disposeSettings(ref); if (owner && !owner.disposed) void owner.turnOn(); }
-    catch (error) { status.textContent = error.message; }
-  }, 'ryb-primary');
-  actions.append(check, start, button('关闭', () => disposeSettings(ref)));
-  form.append(status, actions); dialog.append(form); shadow.append(sheet, dialog);
+  const host = el('div', 'ryb-settings-host'); host.style.cssText = 'position:fixed!important;inset:0!important;pointer-events:none!important;z-index:2147483647!important';
+  const shadow = host.attachShadow({ mode: 'open' }); const style = el('style'); style.textContent = STYLE;
+  const dialog = el('dialog', 'ryb-settings');
+  const ref = { host, dialog, owner, abort: new AbortController() }; settings = ref;
+  for (const type of ['pointerdown', 'click', 'keydown']) dialog.addEventListener(type, (event) => event.stopPropagation());
+  dialog.addEventListener('close', () => closeSettings(ref));
+  dialog.append(el('h2', '', '双语字幕'));
+  const enabledLabel = el('label', 'ryb-toggle-row');
+  const enabled = el('input'); enabled.type = 'checkbox'; enabled.checked = owner.enabled; enabled.setAttribute('aria-label', '开启双语字幕');
+  enabledLabel.append(el('span', '', '开启双语字幕'), enabled); dialog.append(enabledLabel);
+  const languageLabel = el('label', 'ryb-field'); languageLabel.append(el('span', '', '英文 → 译文语言'));
+  const language = el('select'); language.name = 'target'; language.disabled = true;
+  language.append(el('option', '', '读取 YouTube 支持的语言…')); languageLabel.append(language); dialog.append(languageLabel);
+  const fontLabel = el('label', 'ryb-field');
+  const sizeText = el('span', '', `字号 ${config.fontSize} px`);
+  const font = el('input'); font.type = 'range'; font.name = 'fontSize'; font.min = '12'; font.max = '36'; font.step = '1'; font.value = String(config.fontSize); font.setAttribute('aria-label', '双语字号');
+  fontLabel.append(sizeText, font); dialog.append(fontLabel);
+  dialog.append(el('p', 'ryb-hint', '始终两行、共用背景；长句会用足画面宽度并缩小字号。'));
+  const status = el('p', 'ryb-status'); status.setAttribute('role', 'status'); dialog.append(status);
+  const footer = el('div', 'ryb-settings-footer'); footer.append(button('完成', () => closeSettings(ref), 'ryb-primary')); dialog.append(footer);
+  font.addEventListener('input', () => { try { saveConfig({ ...config, fontSize: Number(font.value) }); sizeText.textContent = `字号 ${config.fontSize} px`; } catch (error) { status.textContent = error.message; } });
+  language.addEventListener('change', () => { try { saveConfig({ ...config, target: language.value }); } catch (error) { status.textContent = error.message; } });
+  enabled.addEventListener('change', () => { if (enabled.checked) void owner.turnOn().then(() => { if (!ref.closed) { enabled.checked = owner.enabled; status.textContent = owner.lastError || ''; } }); else owner.turnOff(); });
+  shadow.append(style, dialog);
   const fs = document.fullscreenElement;
-  (fs && owner && fs.contains(owner.iframe) ? fs : document.body).append(host);
-  dialog.showModal(); syncSurfaces();
+  (fs && fs.contains(owner.iframe) ? fs : document.body).append(host);
+  owner.toolbarButton.setAttribute('aria-expanded', 'true'); dialog.showModal(); owner.sync();
+  void owner.loadInfo(ref.abort.signal).then((info) => {
+    if (ref.closed) return;
+    language.replaceChildren();
+    const priority = ['zh-Hans', 'zh-Hant', 'ja'];
+    const languages = [...info.languages].sort((a, b) => {
+      const ai = priority.includes(a.code) ? priority.indexOf(a.code) : 99, bi = priority.includes(b.code) ? priority.indexOf(b.code) : 99;
+      return ai - bi || languageName(a).localeCompare(languageName(b), 'zh-CN');
+    });
+    for (const item of languages) { const option = el('option', '', languageName(item)); option.value = item.code; language.append(option); }
+    language.value = config.target;
+    if (!language.value) { language.selectedIndex = -1; status.textContent = '请从这个视频支持的语言中选择译文。'; }
+    language.disabled = !languages.length;
+    if (!info.sourceLanguage) { enabled.disabled = true; status.textContent = '该视频没有可用的英文原字幕。'; }
+  }).catch((error) => { if (!ref.closed && error.name !== 'AbortError') status.textContent = error.message; });
+}
+function toolbarIcon() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('width', '18'); svg.setAttribute('height', '18'); svg.setAttribute('aria-hidden', 'true');
+  svg.innerHTML = '<path d="M3 4h18v14H9l-4 3v-3H3z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><text x="5" y="14" font-size="9" font-family="Arial,sans-serif" fill="currentColor">A</text><text x="12" y="14" font-size="9" font-family="PingFang SC,sans-serif" fill="currentColor">文</text>';
+  return svg;
 }
 
 class VideoCaptions {
   constructor(iframe) {
-    this.iframe = iframe;
-    this.videoId = videoIdFromUrl(iframe.src); this.embedId = this.videoId;
-    this.cues = []; this.translations = new Map(); this.epoch = 0;
-    this.enabled = false; this.loading = false; this.time = 0; this.offset = 0;
-    this.lastAttempt = 0;
-    this.surface = new VideoSurface(iframe, STYLE);
-    for (const type of ['pointerdown', 'mousedown', 'click', 'keydown']) this.surface.scene.addEventListener(type, (event) => event.stopPropagation());
-    this.surface.host.dataset.version = VERSION;
-    this.surface.host.dataset.video = this.videoId;
-    this.toggleButton = button('双语', () => {
-      if (this.enabled) this.turnOff(); else void this.turnOn();
-    }, 'ryb-toggle');
-    this.toggleButton.title = '在视频画面内显示原文和译文';
-    this.optionsButton = button('⋯', () => openSettings(this), 'ryb-options');
-    this.optionsButton.setAttribute('aria-label', '字幕设置'); this.optionsButton.title = '字幕设置';
-    const controls = element('div', 'ryb-controls'); controls.append(this.toggleButton, this.optionsButton);
-    this.caption = element('div', 'ryb-captions'); this.caption.hidden = true;
-    this.caption.setAttribute('aria-label', '视频内双语字幕');
-    this.previewLabel = element('span', 'ryb-preview-label');
-    this.source = element('span', 'ryb-source'); this.target = element('span', 'ryb-target');
-    this.caption.append(this.previewLabel, this.source, this.target);
-    this.noticeBox = element('div', 'ryb-notice'); this.noticeBox.hidden = true;
-    this.noticeText = element('span'); this.noticeText.setAttribute('role', 'status');
-    const close = button('×', () => this.clearNotice(), 'ryb-dismiss'); close.setAttribute('aria-label', '关闭字幕提示');
-    this.noticeBox.append(this.noticeText, close);
-    this.surface.scene.append(controls, this.caption, this.noticeBox);
-    this.render();
+    this.iframe = iframe; this.videoId = videoIdFromUrl(iframe.src); this.embedId = this.videoId;
+    this.cues = []; this.time = 0; this.epoch = 0; this.enabled = false; this.loading = false;
+    this.surface = new VideoSurface(iframe, STYLE); this.surface.host.dataset.version = VERSION;
+    this.box = el('div', 'ryb-caption-box'); this.box.hidden = true; this.box.setAttribute('aria-label', '双语字幕');
+    this.source = el('div', 'ryb-line ryb-source'); this.source.dir = 'ltr';
+    this.target = el('div', 'ryb-line ryb-target'); this.target.dir = 'auto';
+    this.box.append(this.source, this.target); this.surface.scene.append(this.box);
+    this.noticeBox = el('div', 'ryb-notice'); this.noticeBox.hidden = true; this.noticeBox.setAttribute('role', 'status'); this.surface.scene.append(this.noticeBox);
+    this.toolbarButton = button('', () => openSettings(this), 'bp3-button bp3-minimal ryb-toolbar-button');
+    this.toolbarButton.append(toolbarIcon()); this.toolbarButton.setAttribute('aria-label', '双语字幕设置'); this.toolbarButton.setAttribute('aria-haspopup', 'dialog'); this.toolbarButton.title = '双语字幕：语言与字号';
+    this.toolbarButton.addEventListener('click', (event) => event.stopPropagation());
+    this.toolbarButton.addEventListener('mousedown', (event) => event.stopPropagation());
+    this.canvas = document.createElement('canvas'); this.measure = this.canvas.getContext('2d');
+    this.mountToolbar();
   }
-  notice(text, duration = 0) {
-    if (this.disposed) return;
-    clearTimeout(this.noticeTimer); this.noticeText.textContent = text; this.noticeBox.hidden = !text;
-    if (duration) this.noticeTimer = setTimeout(() => this.clearNotice(), duration);
+  mountToolbar() {
+    const wrapper = this.iframe.parentElement?.closest('.rm-video-player__spacing-wrapper, .rm-iframe__spacing-wrapper');
+    const native = wrapper?.querySelector('.rm-video-player__theater-toolbar');
+    let target = native;
+    if (!target) {
+      const anchor = wrapper || this.surface.findContainer() || this.iframe;
+      if (!this.fallback) this.fallback = el('div', 'ryb-toolbar-fallback');
+      if (this.fallback.previousElementSibling !== anchor) anchor.insertAdjacentElement('afterend', this.fallback);
+      target = this.fallback;
+    }
+    if (this.toolbarButton.parentElement !== target) target.append(this.toolbarButton);
+    if (native && this.fallback) { this.fallback.remove(); this.fallback = null; }
   }
-  clearNotice() { clearTimeout(this.noticeTimer); this.noticeBox.hidden = true; this.noticeText.textContent = ''; }
+  updateIcon() { this.toolbarButton.dataset.active = String(this.enabled); this.toolbarButton.dataset.loading = String(this.loading); this.toolbarButton.setAttribute('aria-busy', String(this.loading)); }
+  notice(message, duration = 0) { if (this.disposed) return; clearTimeout(this.noticeTimer); this.noticeBox.textContent = message; this.noticeBox.hidden = !message; if (duration) this.noticeTimer = setTimeout(() => { this.noticeBox.hidden = true; }, duration); }
+  async loadInfo() {
+    if (this.info) return this.info;
+    if (!this.infoPromise) {
+      this.infoAbort = new AbortController();
+      this.infoPromise = request('/v1/youtube/video-info', { videoId: this.videoId }, this.infoAbort.signal).then((info) => {
+        if (this.disposed || info.videoId !== this.videoId || !Array.isArray(info.languages)) throw new Error('当前视频信息已改变。');
+        this.info = info; return info;
+      }).finally(() => { this.infoPromise = null; });
+    }
+    return this.infoPromise;
+  }
   connect() {
     if (this.clock) return;
     this.clock = new YouTubeClock(this.iframe, (time) => {
       if (this.disposed) return;
-      this.time = time; this.render();
-      if (this.enabled && Date.now() - this.lastAttempt > 1500) void this.translateNear();
-    }, (state) => {
-      if (this.enabled && /未收到|中断/.test(state)) this.notice(state);
-    }, (id) => {
-      this.turnOff(); this.videoId = id; this.surface.host.dataset.video = id;
-      this.cues = []; this.translations.clear(); this.notice('视频已切换。点击“双语”加载新视频字幕。', 5000);
+      if (Math.abs(time - this.time) > 2) this.clearPair();
+      this.time = time;
+    }, (state) => { if (this.enabled && /未收到|中断/.test(state)) this.notice(state); }, (id) => {
+      this.turnOff(); this.videoId = id; this.info = null; this.cues = []; this.notice('视频已切换，请重新开启双语。', 4000);
     });
   }
-  assignCues(cues) {
-    if (!cues.length) throw new Error('没有可用字幕。请尝试导入 SRT / VTT。');
-    if (cues.some((cue) => cue.text.length > 5500)) throw new Error('单条字幕超过 5500 个字符，请先拆分。');
-    this.cues = cues; this.translations.clear(); this.render();
-  }
   async turnOn() {
-    if (this.disposed || this.enabled) return;
-    if (config.provider === 'api' && !config.token) { openSettings(this); return; }
+    if (this.enabled || this.disposed) return;
     for (const video of videos.values()) if (video !== this) video.turnOff();
-    this.turnOff();
-    this.enabled = true; this.loading = true;
-    const epoch = this.epoch, cfg = { ...config }, controller = new AbortController();
-    this.startRequest = controller;
-    this.notice('正在连接字幕服务…'); this.render();
+    this.turnOff(); this.enabled = true; this.loading = true; this.lastError = '';
+    const epoch = this.epoch; const abort = this.startRequest = new AbortController();
+    this.updateIcon(); this.notice('正在准备 YouTube 双语字幕…');
     try {
-      const native = cfg.provider === 'youtube';
-      if (!native || !this.cues.length) {
-        const health = verifyHealth(await request(native ? '/v1/youtube/health' : '/health', undefined, controller.signal, cfg));
-        assertTranslationReady(health, cfg.provider); this.demo = Boolean(health.demo);
-      } else this.demo = false;
+      verifyHealth(await request('/v1/youtube/health', undefined, abort.signal));
+      const info = await this.loadInfo(abort.signal);
+      if (!info.sourceLanguage) throw new Error('该视频没有可用的英文原字幕。');
+      if (!info.languages.some((item) => item.code === config.target)) throw new Error('请在设置中选择本视频支持的译文语言。');
       if (!this.cues.length) {
-        this.notice(`正在获取 ${cfg.source} 原字幕…`);
-        const data = await request(native ? '/v1/youtube/captions' : '/v1/captions', { videoId: this.videoId, language: cfg.source }, controller.signal, cfg);
-        if (this.disposed || epoch !== this.epoch || controller.signal.aborted) return;
-        if (data.videoId !== this.videoId || data.language !== cfg.source || native && data.demo) throw new Error('字幕来源与当前视频不匹配，请更新本机服务。');
-        this.assignCues(normalizeCues(data.cues));
-        this.demo = Boolean(data.demo);
+        const data = await request('/v1/youtube/captions', { videoId: this.videoId }, abort.signal);
+        if (this.disposed || epoch !== this.epoch || abort.signal.aborted) return;
+        if (data.videoId !== this.videoId) throw new Error('字幕与当前视频不匹配。');
+        this.cues = normalizeCues(data.cues);
       }
-      if (this.disposed || epoch !== this.epoch || controller.signal.aborted) return;
-      this.connect();
-      if (native) {
-        this.clock.setNativeTranslation(cfg.source, cfg.target);
-        this.notice('英文已载入。中文字幕由 YouTube 自带翻译提供；若未出现，请在播放器字幕菜单选择中文。', 6500);
-      } else this.notice('字幕已载入，正在准备 API 译文…');
+      if (this.disposed || epoch !== this.epoch || abort.signal.aborted) return;
+      this.connect(); this.clock.setNativeTranslation(info.playerSourceLanguage, config.target);
+      this.settleUntil = Date.now() + 1700; this.notice('等待 YouTube 译文…');
     } catch (error) {
-      if (error.name !== 'AbortError' && !controller.signal.aborted && epoch === this.epoch) { this.turnOff(); this.notice(error.message); }
-    } finally {
-      if (this.startRequest === controller) { this.startRequest = null; this.loading = false; this.render(); }
-    }
+      if (error.name !== 'AbortError' && epoch === this.epoch) { this.turnOff(); this.lastError = error.message; this.notice(error.message); }
+    } finally { if (this.startRequest === abort) { this.startRequest = null; this.loading = false; this.updateIcon(); } }
   }
+  clearPair() { this.pair = null; this.box.hidden = true; this.source.textContent = ''; this.target.textContent = ''; }
   turnOff() {
     this.epoch++; this.enabled = false; this.loading = false;
-    this.clock?.clearNativeTranslation();
-    this.startRequest?.abort(); this.startRequest = null;
-    this.translationRequest?.abort(); this.translationRequest = null;
-    this.clearNotice(); this.render();
+    this.startRequest?.abort(); this.startRequest = null; this.captureRequest?.abort(); this.captureRequest = null;
+    this.clock?.clearNativeTranslation(); this.clearPair(); clearTimeout(this.noticeTimer); this.noticeBox.hidden = true; this.updateIcon();
   }
-  render() {
-    if (!this.toggleButton || this.disposed) return;
-    this.toggleButton.textContent = this.loading ? '加载中' : '双语';
-    this.toggleButton.setAttribute('aria-label', this.enabled ? '关闭双语字幕' : '开启双语字幕');
-    this.toggleButton.setAttribute('aria-pressed', String(this.enabled));
-    this.toggleButton.setAttribute('aria-busy', String(this.loading));
-    this.surface.host.dataset.enabled = String(this.enabled);
-    this.previewLabel.textContent = this.demo ? 'API 演示预置字幕 · 非视频转录' : '';
-    this.surface.host.dataset.provider = config.provider;
-    const index = activeCueIndex(this.cues, this.time - this.offset);
-    const cue = this.cues[index];
-    const visible = this.enabled && !this.loading && this.clock?.isSynchronized() && cue;
-    this.caption.hidden = !visible;
-    this.source.textContent = visible ? cue.text : '';
-    // YouTube renders the real target-language caption inside its iframe. Do not
-    // replace it with a placeholder, preview string, or an external AI response.
-    this.target.textContent = visible && config.provider === 'api' ? this.translations.get(cue.id) || '译文加载中…' : '';
+  changeTarget() {
+    this.clearPair();
+    if (this.loading) return; // The startup path applies the latest target after source loading.
+    this.epoch++; this.captureRequest?.abort(); this.captureRequest = null;
+    if (this.enabled && this.info) { this.clock?.setNativeTranslation(this.info.playerSourceLanguage, config.target); this.settleUntil = Date.now() + 2200; this.notice('正在切换 YouTube 字幕语言…'); }
   }
-  async translateNear() {
-    if (config.provider !== 'api' || !this.enabled || this.loading || this.disposed || this.translationRequest || document.hidden || !this.clock?.isSynchronized()) return;
-    this.lastAttempt = Date.now();
-    const entries = translationWindow(this.cues, this.time - this.offset, this.translations);
-    if (!entries.length) return;
-    const controller = new AbortController(), epoch = this.epoch, cfg = { ...config };
-    this.translationRequest = controller;
+  screenFrame() {
+    const rect = this.iframe.getBoundingClientRect();
+    const scale = outerWidth > 0 && innerWidth > 0 ? outerWidth / innerWidth : 1;
+    return { x: screenX + rect.x * scale, y: screenY + outerHeight - innerHeight * scale + rect.y * scale, width: rect.width * scale, height: rect.height * scale };
+  }
+  async capture() {
+    if (!this.enabled || this.loading || this.disposed || this.captureRequest || settings || document.hidden || !this.clock?.isSynchronized() || Date.now() < (this.settleUntil || 0) || Date.now() < (this.retryAfter || 0)) return;
+    const epoch = this.epoch, videoId = this.videoId, target = config.target;
+    const before = Date.now(), playback = this.clock.currentTime(), rate = this.clock.state === 1 ? this.clock.rate : 0;
+    const frame = this.screenFrame(); const abort = this.captureRequest = new AbortController();
     try {
-      const data = await request('/v1/translate', { entries, target: cfg.target }, controller.signal, cfg);
-      if (this.disposed || epoch !== this.epoch || controller.signal.aborted) return;
-      if (data.target !== cfg.target) throw new Error('译文语言不匹配，请更新本机服务。');
-      for (const entry of validateTranslations(data.translations, entries)) this.translations.set(entry.id, entry.text);
-      this.clearNotice(); this.render();
+      const data = await request('/v1/youtube/caption-state', { videoId, target, frame }, abort.signal);
+      if (this.disposed || epoch !== this.epoch || abort.signal.aborted || data.videoId !== videoId || data.target !== target) return;
+      if (!data.matched) { if (data.reason !== 'busy') this.clearPair(); return; }
+      const now = Date.now();
+      if (typeof data.text !== 'string' || data.text.length > 1200 || !Number.isFinite(data.sampledAt) || data.sampledAt < before - 100 || data.sampledAt > now + 100) throw new Error('字幕桥返回了无效时间或文本。');
+      const bounds = data.bounds;
+      if (!bounds || !['left', 'top', 'width', 'height'].every((key) => Number.isFinite(bounds[key])) || bounds.width <= 0 || bounds.width > 1.1 || bounds.left < -.05 || bounds.left + bounds.width > 1.05 || bounds.height <= 0 || bounds.height > .7 || bounds.top < 0 || bounds.top + bounds.height > 1.02) throw new Error('字幕读取位置无效。');
+      const time = playback + Math.max(0, data.sampledAt - before) / 1000 * rate;
+      const index = activeCueIndex(this.cues, time);
+      if (index < 0 || Math.abs(this.clock.currentTime() - time) > 1.5) { this.clearPair(); return; }
+      this.pair = { source: singleLine(this.cues[index].text), target: singleLine(data.text), bounds, sampledAt: data.sampledAt, time };
+      this.noticeBox.hidden = true; this.lastError = ''; this.drawPair();
     } catch (error) {
-      if (error.name !== 'AbortError' && !controller.signal.aborted && epoch === this.epoch) { this.turnOff(); this.notice(`${error.message} 可在字幕设置中检查连接。`); }
-    } finally { if (this.translationRequest === controller) this.translationRequest = null; }
+      if (error.name !== 'AbortError' && epoch === this.epoch) { this.clearPair(); this.lastError = error.message; this.notice(error.message); this.retryAfter = Date.now() + 2000; }
+    } finally { if (this.captureRequest === abort) this.captureRequest = null; }
   }
-  destroy() {
-    this.turnOff(); this.disposed = true;
-    this.clock?.destroy(); this.surface.destroy();
-    if (settings?.owner === this) disposeSettings(settings);
+  drawPair() {
+    if (!this.enabled || !this.pair || this.disposed) { this.box.hidden = true; return; }
+    const rect = this.iframe.getBoundingClientRect(), pair = this.pair;
+    if (rect.width < 160 || rect.height < 90 || !pair.source || !pair.target) { this.box.hidden = true; return; }
+    if (this.source.textContent !== pair.source) this.source.textContent = pair.source;
+    if (this.target.textContent !== pair.target) this.target.textContent = pair.target;
+    const available = rect.width - 28;
+    this.measure.font = `400 ${config.fontSize}px Arial, "PingFang SC", sans-serif`;
+    const measured = Math.max(this.measure.measureText(pair.source).width, this.measure.measureText(pair.target).width);
+    const font = fittedFontSize(config.fontSize, available, measured);
+    const textWidth = measured * font / config.fontSize;
+    const width = Math.min(rect.width - 8, Math.max(textWidth + 24, pair.bounds.width * rect.width + 24));
+    const height = Math.max(font * 2.5 + 12, pair.bounds.height * rect.height + 20);
+    const bottom = Math.min(rect.height, (pair.bounds.top + pair.bounds.height) * rect.height + 10);
+    const top = Math.max(0, bottom - height);
+    Object.assign(this.box.style, { width: `${width}px`, height: `${height}px`, left: `${Math.max(4, (rect.width - width) / 2)}px`, top: `${top}px`, fontSize: `${font}px` });
+    this.box.dataset.fontSize = String(font); this.box.hidden = false;
   }
-}
-function syncSurfaces() {
-  if (!active) return;
-  for (const video of videos.values()) {
-    video.surface.sync({ blocked: !!settings?.dialog.open, fontScale: config.fontScale, bottomRatio: config.bottomRatio });
+  sync() {
+    this.mountToolbar(); this.surface.sync({ blocked: !!settings });
+    if (this.pair && !settings && Date.now() - this.pair.sampledAt > 1400) this.clearPair();
+    this.drawPair();
+    if (Date.now() - (this.lastCaptureAttempt || 0) >= (this.clock?.state === 1 ? 300 : 500)) { this.lastCaptureAttempt = Date.now(); void this.capture(); }
   }
+  destroy() { this.turnOff(); this.disposed = true; this.infoAbort?.abort(); this.clock?.destroy(); this.surface.destroy(); this.toolbarButton.remove(); this.fallback?.remove(); if (settings?.owner === this) closeSettings(); }
 }
 function scan() {
   if (!active) return;
-  for (const [iframe, video] of videos) {
-    if (!iframe.isConnected || videoIdFromUrl(iframe.src) !== video.embedId) { video.destroy(); videos.delete(iframe); }
-  }
-  for (const iframe of document.querySelectorAll('iframe[src]')) {
-    if (videos.has(iframe) || !videoIdFromUrl(iframe.src) || !new URL(iframe.src).pathname.startsWith('/embed/')) continue;
-    videos.set(iframe, new VideoCaptions(iframe));
-  }
-  syncSurfaces();
+  for (const [iframe, video] of videos) if (!iframe.isConnected || videoIdFromUrl(iframe.src) !== video.embedId) { video.destroy(); videos.delete(iframe); }
+  for (const iframe of document.querySelectorAll('iframe[src]')) if (!videos.has(iframe) && videoIdFromUrl(iframe.src) && new URL(iframe.src).pathname.startsWith('/embed/')) videos.set(iframe, new VideoCaptions(iframe));
 }
 function onload() {
   onunload(); active = true;
-  try {
-    const saved = JSON.parse(sessionStorage.getItem(STORAGE_KEY) || '{}');
-    config = validateConfig({ ...DEFAULT_CONFIG, ...saved, provider: saved.provider });
-  } catch { config = { ...DEFAULT_CONFIG }; }
+  try { config = validateConfig(JSON.parse(sessionStorage.getItem(STORAGE_KEY) || '{}')); } catch { config = { ...DEFAULT_CONFIG }; }
+  globalStyle = el('style'); globalStyle.dataset.rybToolbar = 'true'; globalStyle.textContent = '.ryb-toolbar-button{width:30px!important;min-width:30px!important;height:30px!important;padding:6px!important;display:inline-flex!important;align-items:center;justify-content:center;background:transparent;border:0;border-radius:3px;color:#607789;cursor:pointer}.ryb-toolbar-button:hover{background:#6077891c}.ryb-toolbar-button[data-active="true"]{color:#2378b5;background:#2378b512}.ryb-toolbar-button svg{display:block;pointer-events:none}.ryb-toolbar-fallback{display:flex;justify-content:flex-end;min-height:30px}.ryb-toolbar-button:focus-visible{outline:2px solid #2378b5;outline-offset:2px}'; document.head.append(globalStyle);
   observer = new MutationObserver((records) => {
-    if (records.every((record) => record.target instanceof Element && record.target.closest('.ryb-surface-host,.ryb-settings-host'))) return;
+    if (records.every((record) => record.target instanceof Element && record.target.closest('.ryb-surface-host,.ryb-settings-host,.ryb-toolbar-button'))) return;
     if (!scanTimer) scanTimer = setTimeout(() => { scanTimer = null; scan(); }, 100);
   });
   observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] });
-  surfaceTimer = setInterval(syncSurfaces, 120);
+  surfaceTimer = setInterval(() => { for (const video of videos.values()) video.sync(); }, 120);
   if (window.roamAlphaAPI?.ui?.commandPalette) {
-    window.roamAlphaAPI.ui.commandPalette.addCommand({ label: commandLabel, callback: () => openSettings([...videos.values()][0] || null) }); commandRegistered = true;
+    window.roamAlphaAPI.ui.commandPalette.addCommand({ label: commandLabel, callback: () => openSettings([...videos.values()][0]) });
+    window.roamAlphaAPI.ui.commandPalette.addCommand({ label: fullscreenCommand, callback: () => { const video = [...videos.values()].find((v) => v.enabled) || [...videos.values()][0]; if (video) void video.surface.toggleFullscreen().catch((error) => video.notice(error.message)); } });
+    commandRegistered = true;
   }
   scan();
 }
 function onunload() {
-  active = false; observer?.disconnect(); observer = null;
-  clearTimeout(scanTimer); scanTimer = null; clearInterval(surfaceTimer); surfaceTimer = null;
-  disposeSettings(settings);
-  for (const video of videos.values()) video.destroy(); videos.clear();
-  if (commandRegistered) window.roamAlphaAPI?.ui?.commandPalette?.removeCommand({ label: commandLabel });
+  active = false; observer?.disconnect(); observer = null; clearTimeout(scanTimer); scanTimer = null; clearInterval(surfaceTimer); surfaceTimer = null;
+  closeSettings(); for (const video of videos.values()) video.destroy(); videos.clear(); globalStyle?.remove(); globalStyle = null;
+  if (commandRegistered) { window.roamAlphaAPI?.ui?.commandPalette?.removeCommand({ label: commandLabel }); window.roamAlphaAPI?.ui?.commandPalette?.removeCommand({ label: fullscreenCommand }); }
   commandRegistered = false;
 }
 export default { onload, onunload };
