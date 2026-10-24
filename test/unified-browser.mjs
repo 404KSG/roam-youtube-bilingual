@@ -1,6 +1,6 @@
 // Mock-data layout/behavior tests. Only run on the agent-owned /test-fixture.
 // This is not evidence of live YouTube translation or desktop bridge operation.
-export async function runUnifiedAcceptance() {
+export async function runUnifiedAcceptance(options = {}) {
   if (location.pathname !== '/test-fixture') throw new Error('Isolated fixture only.');
   const results = {}, calls = [];
   const assert = (condition, name) => { if (!condition) throw new Error(name); results[name] = true; };
@@ -45,6 +45,12 @@ export async function runUnifiedAcceptance() {
   const setting = () => document.querySelector('.ryb-settings-host')?.shadowRoot;
   const done = () => [...setting().querySelectorAll('button')].find((node) => node.textContent === '完成').click();
   const clock = (time) => window.dispatchEvent(new MessageEvent('message', { source: frame.contentWindow, origin: 'https://www.youtube.com', data: { event: 'infoDelivery', info: { currentTime: time, playerState: 2 } } }));
+  let held = false;
+  const cleanup = () => {
+    window.fetch = originalFetch; nativeCaption.remove(); plugin.onunload();
+    if (hiddenDescriptor) Object.defineProperty(document, 'hidden', hiddenDescriptor); else delete document.hidden;
+    delete window.__unifiedFixtureCleanup;
+  };
   try {
     plugin.onload();
     const toolbar = document.querySelector('.rm-video-player__theater-toolbar');
@@ -75,7 +81,9 @@ export async function runUnifiedAcceptance() {
     assert(a.scrollWidth <= box.clientWidth - 20 && b.scrollWidth <= box.clientWidth - 20, 'long lines fit horizontally instead of becoming four lines');
     const nr = nativeCaption.getBoundingClientRect(), boxRect = box.getBoundingClientRect(), fr = frame.getBoundingClientRect();
     assert(boxRect.left <= fr.left + nr.left && boxRect.right >= fr.left + nr.right && boxRect.top <= fr.top + nr.top && boxRect.bottom >= fr.top + nr.bottom, 'shared box masks the original native-caption rectangle');
+    if (options.capture) { held = true; window.__unifiedFixtureCleanup = cleanup; return { ...results, screenshotUsesMockData: true }; }
     icon.click();
+    await wait(() => setting()?.querySelector('select').disabled === false);
     setting().querySelector('[name=target]').value = 'ja'; setting().querySelector('[name=target]').dispatchEvent(new Event('change'));
     setting().querySelector('[name=fontSize]').value = '14'; setting().querySelector('[name=fontSize]').dispatchEvent(new Event('input'));
     done();
@@ -96,8 +104,8 @@ export async function runUnifiedAcceptance() {
     plugin.onload(); plugin.onload();
     assert(document.querySelectorAll('.ryb-toolbar-button').length === 1, 'reload never duplicates the toolbar icon');
     return results;
-  } finally {
-    window.fetch = originalFetch; nativeCaption.remove(); plugin.onunload();
-    if (hiddenDescriptor) Object.defineProperty(document, 'hidden', hiddenDescriptor); else delete document.hidden;
-  }
+  } catch (error) {
+    error.message += JSON.stringify({ passed: Object.keys(results), lastTargets: calls.filter((call) => call.path.endsWith('caption-state')).slice(-3).map((call) => call.body.target) });
+    throw error;
+  } finally { if (!held) cleanup(); }
 }

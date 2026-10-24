@@ -36,6 +36,7 @@ test('open native menus and empty/locked-screen trees fail closed', () => {
 test('Chinese and Japanese lines are joined, while Latin word boundaries are retained', () => {
   assert.equal(joinCaptionLines(['字幕を', '表示します。'], 'ja'), '字幕を表示します。');
   assert.equal(joinCaptionLines(['Bonjour', 'le monde'], 'fr'), 'Bonjour le monde');
+  assert.equal(joinCaptionLines(['ภาษา', 'ไทย'], 'th'), 'ภาษาไทย');
   assert.equal(joinCaptionLines(['NVIDIA', 'GPU'], 'zh-Hans'), 'NVIDIA GPU');
 });
 test('video metadata uses the supplied language list and removes raw URLs', () => {
@@ -48,10 +49,12 @@ test('video metadata uses the supplied language list and removes raw URLs', () =
 });
 test('peer check authenticates the client UID, not the server side of a socket', async () => {
   let calls = 0; const socket = { remoteAddress: '127.0.0.1', remotePort: 50001 };
-  const verify = createPeerVerifier({ platform: 'darwin', uid: 501, exec: async () => { calls++; return { stdout: 'p10\nu501\nn127.0.0.1:50001->127.0.0.1:17321\n' }; } });
-  await verify(socket, 17321); await verify(socket, 17321); assert.equal(calls, 1);
+  const verify = createPeerVerifier({ platform: 'darwin', uid: 501, exec: async (path) => { calls++; return { stdout: path.endsWith('lsof') ? 'p10\nu501\nn127.0.0.1:50001->127.0.0.1:17321\n' : '/Applications/Roam Research.app/Contents/Frameworks/Roam Research Helper' }; } });
+  await verify(socket, 17321); await verify(socket, 17321); assert.equal(calls, 2);
   const wrong = createPeerVerifier({ platform: 'darwin', uid: 501, exec: async () => ({ stdout: 'p10\nu502\nn127.0.0.1:50001->127.0.0.1:17321\np20\nu501\nn127.0.0.1:17321->127.0.0.1:50001\n' }) });
   await assert.rejects(wrong(socket, 17321), (error) => error.status === 403);
+  const otherApp = createPeerVerifier({ platform: 'darwin', uid: 501, exec: async (path) => ({ stdout: path.endsWith('lsof') ? 'p10\nu501\nn127.0.0.1:50001->127.0.0.1:17321\n' : '/Applications/Other.app/Contents/MacOS/Other' }) });
+  await assert.rejects(otherApp(socket, 17321), (error) => error.status === 403);
 });
 test('read bridge uses only permitted read-only tools and never returns AX snapshots', async () => {
   const calls = [];

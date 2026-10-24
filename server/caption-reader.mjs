@@ -16,7 +16,7 @@ function rectOf(frame) { return frame && { x: frame.x, y: frame.y, width: frame.
 function normalizedTitle(value) { return String(value || '').normalize('NFKC').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s*[-–—]\s*YouTube\s*$/i, '').replace(/\s+/g, ' ').trim(); }
 export function joinCaptionLines(lines, language) {
   const clean = lines.map((line) => String(line).replace(/\s+/g, ' ').trim()).filter(Boolean);
-  if (!/^(zh|ja)(?:-|$)/i.test(language)) return clean.join(' ');
+  if (!/^(zh|ja|yue|cmn|th|lo|km|my)(?:-|$)/i.test(language)) return clean.join(' ');
   return clean.reduce((result, line) => result + (result && /[A-Za-z0-9]$/.test(result) && /^[A-Za-z0-9]/.test(line) ? ' ' : '') + line, '');
 }
 
@@ -42,14 +42,14 @@ export function extractCaption(snapshot, { title, frame, target }) {
   const center = rect.x + rect.width / 2;
   const rows = owned.filter(({ entry, parents }) => {
     const b = rectOf(entry.frame), text = entry.value || entry.label || '';
-    return entry.role === 'AXStaticText' && b && b.width > 1 && b.height >= 8 && b.height < rect.height * 0.3 && b.y >= rect.y + rect.height * 0.5 && b.y + b.height <= rect.y + rect.height + 3 && Math.abs(b.x + b.width / 2 - center) <= Math.max(10, rect.width * 0.015) && !/^Time (elapsed|duration)/i.test(text) && !parents.some((p) => /AX(Button|Link|Menu|Slider|CheckBox)/.test(p.role));
+    return entry.role === 'AXStaticText' && b && b.width > 1 && b.height >= 8 && b.height < rect.height * 0.3 && b.y >= rect.y + rect.height * 0.5 && b.y + b.height <= rect.y + rect.height + 3 && Math.abs(b.x + b.width / 2 - center) <= Math.max(10, rect.width * 0.015) && !/^Time (elapsed|duration)/i.test(text) && !/^(?:English|英语|英語)\s*>>/.test(text) && !/^(?:Click|点击|點按).*(?:settings|设置|設定)/i.test(text) && !parents.some((p) => /AX(Button|Link|Menu|Slider|CheckBox)/.test(p.role));
   }).map(({ entry }) => ({ text: entry.value || entry.label, ...rectOf(entry.frame) })).sort((a, b) => b.y - a.y);
   if (!rows.length || rows[0].y + rows[0].height < rect.y + rect.height * 0.82) return null;
   const cluster = [rows[0]];
   for (const row of rows.slice(1)) {
     const previous = cluster.at(-1);
     if (row.y === previous.y && row.text === previous.text) continue;
-    if (previous.y - (row.y + row.height) > Math.max(previous.height, row.height) * 0.8 || cluster.length >= 6) break;
+    if (previous.y - (row.y + row.height) > Math.max(previous.height, row.height) * 0.8 || Math.abs(previous.height - row.height) > Math.max(previous.height, row.height) * 0.25 || cluster.length >= 6) break;
     cluster.push(row);
   }
   cluster.reverse();
@@ -70,15 +70,17 @@ export function createPeerVerifier({ exec = execute, uid = process.getuid?.(), p
       const peerPort = socket.remotePort;
       if (!Number.isInteger(peerPort) || !['127.0.0.1', '::ffff:127.0.0.1'].includes(socket.remoteAddress)) return false;
       const { stdout } = await exec('/usr/sbin/lsof', ['-nP', `-iTCP:${peerPort}`, '-Fpun'], { timeout: 1800, maxBuffer: 128 * 1024, env: localEnv() });
-      let owner;
+      let owner, pid, clientPid;
       for (const line of stdout.split('\n')) {
-        if (line.startsWith('p')) owner = undefined;
+        if (line.startsWith('p')) { owner = undefined; pid = Number(line.slice(1)); }
         if (line.startsWith('u')) owner = Number(line.slice(1));
-        if (line.slice(1).split(' ')[0] === `127.0.0.1:${peerPort}->127.0.0.1:${port}` && line[0] === 'n' && owner === uid) return true;
+        if (line.slice(1).split(' ')[0] === `127.0.0.1:${peerPort}->127.0.0.1:${port}` && line[0] === 'n' && owner === uid) clientPid = pid;
       }
-      return false;
+      if (!Number.isInteger(clientPid) || clientPid <= 0) return false;
+      const processInfo = await exec('/bin/ps', ['-ww', '-p', String(clientPid), '-o', 'comm='], { timeout: 1000, maxBuffer: 8192, env: localEnv() });
+      return processInfo.stdout.trim().includes('/Roam Research.app/Contents/');
     })().catch(() => false));
-    if (!await peers.get(socket)) throw Object.assign(new Error('字幕读取仅允许当前登录用户的本机连接。'), { status: 403 });
+    if (!await peers.get(socket)) throw Object.assign(new Error('字幕读取仅允许当前登录用户的 Roam 桌面进程连接。'), { status: 403 });
   };
 }
 
@@ -116,6 +118,8 @@ export function createCaptionReader({ exec = execute, platform = process.platfor
         const started = now();
         const snapshot = await cli('get_window_state', { pid: discovery.pid, window_id: windows[0].window_id, include_screenshot: false, max_depth: 4, max_elements: 600 }, signal);
         const ended = now();
+        const playerVisible = snapshot.elements?.some((entry) => entry.role === 'AXWebArea' && /YouTube\s*$/i.test(entry.label || '') && normalizedTitle(entry.label) === normalizedTitle(title));
+        if (!playerVisible) return { matched: false, reason: 'player-not-visible', retryAfterMs: 1500 };
         // Only this sanitized result survives. No AX tree, note content, app
         // titles, screenshots, or raw errors are returned or persisted.
         const caption = extractCaption(snapshot, { title, frame, target });

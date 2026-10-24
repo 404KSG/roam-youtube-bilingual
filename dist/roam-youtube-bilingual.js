@@ -398,6 +398,7 @@ function closeSettings(ref = settings) {
 function openSettings(owner) {
   if (!owner || owner.disposed) return;
   if (settings) { settings.dialog.focus(); return; }
+  owner.captureRequest?.abort(); owner.captureRequest = null;
   const host = el('div', 'ryb-settings-host'); host.style.cssText = 'position:fixed!important;inset:0!important;pointer-events:none!important;z-index:2147483647!important';
   const shadow = host.attachShadow({ mode: 'open' }); const style = el('style'); style.textContent = STYLE;
   const dialog = el('dialog', 'ryb-settings');
@@ -459,8 +460,7 @@ class VideoCaptions {
     this.noticeBox = el('div', 'ryb-notice'); this.noticeBox.hidden = true; this.noticeBox.setAttribute('role', 'status'); this.surface.scene.append(this.noticeBox);
     this.toolbarButton = button('', () => openSettings(this), 'bp3-button bp3-minimal ryb-toolbar-button');
     this.toolbarButton.append(toolbarIcon()); this.toolbarButton.setAttribute('aria-label', '双语字幕设置'); this.toolbarButton.setAttribute('aria-haspopup', 'dialog'); this.toolbarButton.title = '双语字幕：语言与字号';
-    this.toolbarButton.addEventListener('click', (event) => event.stopPropagation());
-    this.toolbarButton.addEventListener('mousedown', (event) => event.stopPropagation());
+    for (const type of ['click', 'pointerdown', 'mousedown', 'keydown']) this.toolbarButton.addEventListener(type, (event) => event.stopPropagation());
     this.canvas = document.createElement('canvas'); this.measure = this.canvas.getContext('2d');
     this.mountToolbar();
   }
@@ -534,7 +534,7 @@ class VideoCaptions {
     this.clearPair();
     if (this.loading) return; // The startup path applies the latest target after source loading.
     this.epoch++; this.captureRequest?.abort(); this.captureRequest = null;
-    if (this.enabled && this.info) { this.clock?.setNativeTranslation(this.info.playerSourceLanguage, config.target); this.settleUntil = Date.now() + 2200; this.notice('正在切换 YouTube 字幕语言…'); }
+    if (this.enabled && this.info) { this.clock?.setNativeTranslation(this.info.playerSourceLanguage, config.target); this.settleUntil = Date.now() + 3300; this.notice('正在切换 YouTube 字幕语言…'); }
   }
   screenFrame() {
     const rect = this.iframe.getBoundingClientRect();
@@ -542,14 +542,20 @@ class VideoCaptions {
     return { x: screenX + rect.x * scale, y: screenY + outerHeight - innerHeight * scale + rect.y * scale, width: rect.width * scale, height: rect.height * scale };
   }
   async capture() {
-    if (!this.enabled || this.loading || this.disposed || this.captureRequest || settings || document.hidden || !this.clock?.isSynchronized() || Date.now() < (this.settleUntil || 0) || Date.now() < (this.retryAfter || 0)) return;
+    if (!this.enabled || this.loading || this.disposed || this.captureRequest || settings || document.hidden || this.surface.host.style.display === 'none' || !this.clock?.isSynchronized() || Date.now() < (this.settleUntil || 0) || Date.now() < (this.retryAfter || 0)) return;
     const epoch = this.epoch, videoId = this.videoId, target = config.target;
     const before = Date.now(), playback = this.clock.currentTime(), rate = this.clock.state === 1 ? this.clock.rate : 0;
     const frame = this.screenFrame(); const abort = this.captureRequest = new AbortController();
     try {
       const data = await request('/v1/youtube/caption-state', { videoId, target, frame }, abort.signal);
       if (this.disposed || epoch !== this.epoch || abort.signal.aborted || data.videoId !== videoId || data.target !== target) return;
-      if (!data.matched) { if (data.reason !== 'busy') this.clearPair(); return; }
+      const currentFrame = this.screenFrame();
+      if (Math.abs(currentFrame.width - frame.width) > 4 || Math.abs(currentFrame.height - frame.height) > 4) { this.clearPair(); return; }
+      if (!data.matched) {
+        if (data.reason !== 'busy') this.clearPair();
+        if (Number.isFinite(data.retryAfterMs)) this.retryAfter = Date.now() + Math.max(0, Math.min(5000, data.retryAfterMs));
+        return;
+      }
       const now = Date.now();
       if (typeof data.text !== 'string' || data.text.length > 1200 || !Number.isFinite(data.sampledAt) || data.sampledAt < before - 100 || data.sampledAt > now + 100) throw new Error('字幕桥返回了无效时间或文本。');
       const bounds = data.bounds;
@@ -579,9 +585,20 @@ class VideoCaptions {
     const bottom = Math.min(rect.height, (pair.bounds.top + pair.bounds.height) * rect.height + 10);
     const top = Math.max(0, bottom - height);
     Object.assign(this.box.style, { width: `${width}px`, height: `${height}px`, left: `${Math.max(4, (rect.width - width) / 2)}px`, top: `${top}px`, fontSize: `${font}px` });
-    this.box.dataset.fontSize = String(font); this.box.hidden = false;
+    this.box.hidden = false;
+    // Validate actual shaped text too (e.g. Arabic or fallback CJK fonts), not
+    // just canvas estimates. Keep the complete text on one line per language.
+    const range = document.createRange();
+    const renderedWidth = Math.max(...[this.source, this.target].map((row) => { range.selectNodeContents(row); return range.getBoundingClientRect().width; }));
+    const innerWidth = Math.max(1, width - 24);
+    const finalFont = renderedWidth > innerWidth ? font * (innerWidth - 1) / renderedWidth : font;
+    this.box.style.fontSize = `${finalFont}px`; this.box.dataset.fontSize = String(finalFont);
   }
   sync() {
+    const rect = this.iframe.getBoundingClientRect();
+    const geometry = `${rect.width.toFixed(1)}:${rect.height.toFixed(1)}`;
+    if (this.geometry && this.geometry !== geometry) this.clearPair();
+    this.geometry = geometry;
     this.mountToolbar(); this.surface.sync({ blocked: !!settings });
     if (this.pair && !settings && Date.now() - this.pair.sampledAt > 1400) this.clearPair();
     this.drawPair();

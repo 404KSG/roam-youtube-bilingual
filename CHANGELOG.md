@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.0-beta.1 — Development candidate, not deployed
+
+Live desktop acceptance is pending. Keep the published 0.4.0 Draft unchanged until that gate passes.
+
+- Move the single settings icon into the native below-video toolbar.
+- Flatten source and translated captions into exactly two non-wrapping rows, sharing one opaque background and a one-pixel row gap.
+- Fit long lines to available width without truncating or adding more rows.
+- Keep only enable, target language, and font size in settings. Remove custom AI APIs and credentials entirely.
+- Discover target languages from the current video's YouTube metadata.
+- Add a macOS desktop-only read bridge using an existing, authorized CuaDriver. It extracts only the matching YouTube caption region and never returns or persists raw accessibility trees, takes screenshots, records, or grants permissions.
+- Restrict desktop-caption access to same-OS-user loopback connections, reject arbitrary PID/tool inputs, and stop reading on missing permission or active recording.
+- Add isolated mock-data tests for two-row layout, shared background, language changes, size changes, cancellation, and toolbar preservation. These are not a substitute for live Roam verification.
+
 ## 0.4.0-beta.1 — YouTube's own translation, 2026-10-25
 
 Draft preview only. Native YouTube translation is now the default; no AI model, API key, or pairing code is required.
