@@ -1,8 +1,11 @@
 .ryb-panel,.ryb-settings{--ryb-ink:#24364a;--ryb-muted:#687b8d;--ryb-border:#d9e3eb;--ryb-paper:#f7fafc;--ryb-blue:#2869a7;--ryb-teal:#176c69;color:var(--ryb-ink);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;box-sizing:border-box}
 .ryb-panel *,.ryb-settings *{box-sizing:border-box}
-.ryb-panel{margin:10px 0 16px;width:100%;min-width:0;clear:both;border:1px solid var(--ryb-border);border-radius:10px;background:var(--ryb-paper);overflow:hidden;text-align:left}
-.ryb-toolbar{display:flex;align-items:center;gap:12px;padding:12px 14px 8px;border-bottom:1px solid var(--ryb-border)}
+.ryb-panel{position:relative;isolation:isolate;flex:none;margin:10px 0 16px;width:100%;min-width:0;clear:both;border:1px solid var(--ryb-border);border-radius:10px;background:var(--ryb-paper);overflow:hidden;text-align:left}
+.rm-video-theater[data-ryb-theater="managed"]{overflow-y:auto;overflow-x:hidden;min-height:0;scrollbar-gutter:stable}
+.rm-video-theater[data-ryb-theater="managed"]>.rm-video-player__spacing-wrapper,.rm-video-theater[data-ryb-theater="managed"]>.rm-iframe__spacing-wrapper{flex:none}
+.ryb-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:12px 14px 8px;border-bottom:1px solid var(--ryb-border)}
 .ryb-brand{letter-spacing:.08em;font-weight:650;white-space:nowrap}
+.ryb-version{font-size:10px;color:var(--ryb-muted);white-space:nowrap}
 .ryb-clock-status{font-size:11px;color:var(--ryb-muted);flex:1}
 .ryb-panel button,.ryb-settings button{font:inherit;cursor:pointer;padding:5px 10px;border:1px solid var(--ryb-border);border-radius:5px;background:transparent;color:var(--ryb-ink);line-height:1.45}
 .ryb-panel button:hover,.ryb-settings button:hover{background:#e6eff7}
@@ -11,7 +14,7 @@
 .ryb-panel .ryb-primary,.ryb-settings .ryb-primary{background:var(--ryb-blue);color:#fff;border-color:var(--ryb-blue)}
 .ryb-actions{display:flex;flex-wrap:wrap;gap:7px;padding:10px 14px 0}
 .ryb-settings-button{font-size:12px!important}
-.ryb-file{display:none}
+.ryb-panel input.ryb-file{display:none!important}
 .ryb-options{display:flex;flex-wrap:wrap;align-items:center;gap:14px;padding:10px 14px 0;font-size:12px;color:var(--ryb-muted)}
 .ryb-options input[type=number]{width:64px;background:transparent;border:1px solid var(--ryb-border);border-radius:4px;color:inherit;padding:3px}
 .ryb-check{display:flex;align-items:center;gap:4px;cursor:pointer}

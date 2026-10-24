@@ -1,5 +1,6 @@
 import { MAX_SUBTITLE_BYTES, videoIdFromUrl, parseSubtitles, normalizeCues, activeCueIndex, formatTime, translationWindow, validateTranslations, exportMarkdown } from './core.mjs';
 import { YouTubeClock } from './clock.mjs';
+import { mountPanel } from './mount.mjs';
 import { VERSION, DEFAULT_CONFIG, PAGE_SIZE, validateConfig, configChange, cuePage, verifyHealth } from './protocol.mjs';
 
 const STORAGE_KEY = 'roam-youtube-bilingual/session/v1';
@@ -120,7 +121,7 @@ function openSettings() {
 }
 
 class SubtitlePanel {
-  constructor(iframe, anchor) {
+  constructor(iframe) {
     this.iframe = iframe;
     this.videoId = videoIdFromUrl(iframe.src);
     this.embedId = this.videoId;
@@ -141,10 +142,13 @@ class SubtitlePanel {
     this.root.contentEditable = 'false';
     const toolbar = element('div', 'ryb-toolbar');
     toolbar.append(element('strong', 'ryb-brand', '双语字幕'));
-    this.clockStatus = element('span', 'ryb-clock-status', '尚未连接');
+    toolbar.append(element('span', 'ryb-version', VERSION));
+    this.clockStatus = element('span', 'ryb-clock-status', '播放器尚未连接');
     this.clockStatus.setAttribute('aria-live', 'polite');
     toolbar.append(this.clockStatus, button('设置', openSettings, 'ryb-settings-button'));
-    this.status = element('p', 'ryb-status', '点击“获取字幕”，或导入 SRT / VTT。原文和译文会同时保留。');
+    this.status = element('p', 'ryb-status', config.token
+      ? '先获取或导入字幕，再开始翻译。若服务未启动，请运行本机 start.command。'
+      : '① 点“设置”连接本机服务 → ② 获取或导入字幕 → ③ 开始翻译。未配置服务时也可以导入字幕查看原文。');
     this.status.setAttribute('role', 'status');
     const actions = element('div', 'ryb-actions');
     this.fetchButton = button('获取字幕', () => this.loadCaptions());
@@ -195,7 +199,7 @@ class SubtitlePanel {
     const footer = element('div', 'ryb-actions ryb-footer');
     footer.append(button('复制当前双语', () => this.copyCurrent()), button('导出双语 Markdown', () => this.export()), button('重新连接', () => this.reconnect()));
     this.root.append(toolbar, actions, settingsRow, this.status, this.current, this.details, footer);
-    anchor.insertAdjacentElement('afterend', this.root);
+    this.mount = mountPanel(iframe, this.root);
     this.overlay = element('div', 'ryb-overlay');
     this.overlay.hidden = true;
     this.overlay.setAttribute('aria-hidden', 'true');
@@ -416,6 +420,7 @@ class SubtitlePanel {
     this.reset();
     clearInterval(this.positionTimer);
     this.clock?.destroy();
+    this.mount?.dispose();
     this.root.remove(); this.overlay.remove();
   }
 }
@@ -425,13 +430,14 @@ function scan() {
   for (const [iframe, panel] of panels) {
     if (!iframe.isConnected || !panel.root.isConnected || videoIdFromUrl(iframe.src) !== panel.embedId) {
       panel.destroy(); panels.delete(iframe);
+    } else if (!panel.mount.isCurrent()) {
+      panel.mount.dispose();
+      panel.mount = mountPanel(iframe, panel.root);
     }
   }
   for (const iframe of document.querySelectorAll('iframe[src]')) {
     if (panels.has(iframe) || !videoIdFromUrl(iframe.src) || !new URL(iframe.src).pathname.startsWith('/embed/')) continue;
-    const parent = iframe.parentElement;
-    const anchor = iframe.closest('.rm-iframe-container, .rm-video-player') || (getComputedStyle(iframe).position === 'absolute' ? parent : iframe);
-    panels.set(iframe, new SubtitlePanel(iframe, anchor));
+    panels.set(iframe, new SubtitlePanel(iframe));
   }
 }
 

@@ -2,11 +2,11 @@
 
 在 Roam Research 内嵌的 YouTube 视频上，同时显示原文和译文，并保留可点击的字幕列表。默认英文 → 简体中文，可配置其他语言。
 
-> **0.2.0-beta.1 · Draft preview only — not a production release.**
+> **0.2.0-beta.2 · Draft preview only — not a production release.**
 >
 > 本仓库与 Roam Depot 草稿 PR 仅供 shorthand 测试，不代表正式上架。不要合并或发布，直到完成用户验收。
 
-包含原生 Roam 插件和只监听本机的 Node.js 服务。已验证真实 YouTube 播放器同步、真实字幕下载、模拟翻译与浏览器回归；尚未在用户的实际 Roam 桌面图谱中验收，也未使用用户的付费 API 验证质量与延迟。
+包含原生 Roam 插件和只监听本机的 Node.js 服务。beta.2 修复了真实 Roam 剧场模式中“只剩一个灰色按钮”的挂载错误：控制面板现在位于完整视频组件外，而不是被 iframe 遮挡的比例容器内。已核对真实桌面 DOM 并复现、修复该故障；完整翻译体验仍需配置用户自己的 API 验收。
 
 ## 包含的功能
 
@@ -80,9 +80,13 @@ Mac 也可双击 `start.command` 启动。首次运行只会从 `.env.example` �
 
 ### 草稿 PR shorthand（用于本次测试）
 
-查看 [Roam Depot 中本扩展的 Draft PR](https://github.com/Roam-Research/roam-depot/pulls?q=is%3Apr+author%3A404KSG+roam-youtube-bilingual)，等待机器人确认测试构建已发布。
+查看 [Draft PR #1509](https://github.com/Roam-Research/roam-depot/pull/1509)，确认最新预览构建成功后，在 **Settings → Roam Depot → Developer mode → Install extension by shorthand** 输入：
 
-在 Roam 的 **Settings → Roam Depot → Developer mode → Install extension by shorthand** 输入机器人给出的 `404KSG+roam-youtube-bilingual+PR编号`。请复制 PR 中的确切值，不要把 `PR编号` 当成文字粘贴。
+```text
+404KSG+roam-youtube-bilingual+1509
+```
+
+已经安装此 shorthand 的用户只需重新加载该开发扩展，不必再添加一份。加载后视频下方应显示完整面板及版本号 `0.2.0-beta.2`。
 
 保持 PR 为 Draft 即可继续测试，无需合并。若已安装 0.1.0 本地版本，先停用旧副本，再加载 shorthand。插件和本机服务必须一起更新至本版本。
 
@@ -135,9 +139,11 @@ npm run demo
 
 正式 `npm start` 也提供 `/demo` 页面，此时“获取字幕”和“开始翻译”会使用真实字幕与 API。页面右侧的示例文本始终标注为测试材料。
 
+`/roam-layout` 是原生 Roam 布局回归页，复刻真实桌面端的类名、绝对定位、零高度比例容器、裁剪和剧场工具栏，不包含任何用户笔记。它用于检查面板位置、按钮命中、侧栏切换和小窗口滚动，不能替代真实 API 翻译验收。
+
 ## 已知限制
 
-- **还需在实际 Roam 桌面环境验收。** 浏览器测试使用独立演示页，没有访问或修改用户图谱。Roam 版本、第三方视频插件和布局可能影响面板位置。
+- **真实模型翻译、其他主题与第三方视频插件仍需验收。** 本次诊断只读取桌面端播放器/插件 DOM 和样式，并临时调整插件面板位置以确认根因，没有修改笔记或图谱块。
 - 仅处理真实 YouTube `/embed/` iframe；不会给普通 YouTube 文本链接添加播放器。
 - **YouTube 原生全屏、原生画中画不显示外层叠加字幕。** 普通 Roam 主窗视频布局支持；可通过扩大 Roam 播放区域观看。
 - 为了共享 Roam 现有播放器，时间同步使用 YouTube iframe 的消息协议，未创建第二个播放器实例。该协议不是官方承诺的稳定接口，YouTube 更新可能需要适配；连接失败会显示状态，提供“重新连接”。
@@ -156,6 +162,8 @@ npm run demo
 - 在真实 Chromium / YouTube embed 上验证配对、字幕载入、双语显示、点击跳转和播放时间反馈；收到 YouTube `infoDelivery` 的 `currentTime: 19.202534`，同步显示 16–22 秒的对应字幕。另已验证原生 Depot ES 模块加载、反复加载/卸载、动态添加/移除视频、文件导入以及 390px 窄屏无横向溢出。
 - 对 YouTube 官方示例视频 `M7lc1UVf-VE` 真实获取 **466 条英文字幕**；开头包括 `JEFF POSNICK: Hey, everybody.`。
 - 新增 12 项浏览器回归：5001 条字幕只挂载 100 行、翻页、定位末页、切换语言保留原文、取消设置、遮挡隐藏、取消后的迟到响应、卸载清理、重复加载、视频切换及 Depot 模块加载。可复用脚本位于 `test/browser-regressions.mjs`，仅允许在隔离 `/demo` 页面运行。
+- beta.2 新增 13 项原生布局生命周期检查，以及 1440×900、900×420、390×700 三种视口的按钮可达性检查。旧版本在同一夹具中只有“开始翻译”命中成功；修复后 7 个控制按钮全部可达。
+- 真实用户报告的视频 `vif8NQcjVf0` 成功获取 **2108 条英文字幕**，开头与截图中的 Jensen Huang 访谈一致。
 - 翻译 API 使用模拟响应及真实本地 HTTP 链路验证；未调用用户真实模型，未产生模型 API 费用。
 
 本地测试日志位于 `artifacts/`，由 `.gitignore` 排除，不上传 GitHub。
@@ -172,6 +180,7 @@ npm run check
 
 - `src/core.mjs`：字幕解析、时间查找、翻译编号验证和导出。
 - `src/clock.mjs`：隔离的 iframe 时钟适配器。
+- `src/mount.mjs`：原生 Roam 视频组件外部挂载、侧栏重挂载和剧场滚动布局生命周期。
 - `src/protocol.mjs`：版本、服务握手、设置校验、缓存失效范围与分页规则。
 - `src/extension.mjs`、`src/style.css`：Roam 插件和界面。
 - `server/`：仅监听 127.0.0.1 的字幕与翻译服务。

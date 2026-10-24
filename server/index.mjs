@@ -54,6 +54,7 @@ export function makeServer({ token, port = 17321, demo = false, captionFetcher =
     const assets = new Map([
       ['/', ['demo/index.html', 'text/html']], ['/demo', ['demo/index.html', 'text/html']],
       ['/demo/sample.vtt', ['demo/sample.vtt', 'text/vtt']],
+      ['/roam-layout', ['demo/roam-layout.html', 'text/html']],
       ['/extension.js', ['extension.js', 'text/javascript']],
       ['/roam-youtube-bilingual.js', ['dist/roam-youtube-bilingual.js', 'text/javascript']],
     ]);

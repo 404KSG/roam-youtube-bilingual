@@ -1,4 +1,4 @@
-export const VERSION = '0.2.0-beta.1';
+export const VERSION = '0.2.0-beta.2';
 export const SERVICE_ID = 'roam-youtube-bilingual';
 export const API_VERSION = 1;
 export const PAGE_SIZE = 100;

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Roam 原生视频容器回归</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;color:#26384a;background:white;font:14px/1.5 -apple-system,BlinkMacSystemFont,sans-serif}header{height:45px;padding:10px 16px;border-bottom:1px solid #dbe2e9}main{display:flex;height:calc(100vh - 45px);overflow:hidden}.roam-main{display:flex;flex-direction:column;position:relative;width:65%;height:100%;padding:0 8px}.roam-body-main{height:100%;min-height:0}aside{padding:20px;border-left:1px solid #dbe2e9;flex:1}button{font:inherit}.fixture-note{font-size:12px;color:#687b8d}
+    /* Type/attribute form selectors must not expose the hidden import control. */
+    input[type="file"]{display:block}
+    /* Structural rules read from Roam desktop. No graph content is included. */
+    .rm-iframe,.rm-video-player{position:absolute;top:0;left:0;width:100%;height:100%;border:0}
+    .rm-iframe__container,.rm-video-player__container{position:relative;padding-bottom:52.65%;padding-top:30px;height:0;overflow:hidden;margin-right:0}
+    .rm-video-player__spacing-wrapper{--rm-video-w:16;--rm-video-h:9;position:relative}
+    .rm-video-theater{height:100%;width:100%;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;justify-content:flex-start}
+    .rm-video-player__spacing-wrapper--theater{width:min(100%,calc((100vh - 45px - 40px)*16/9));max-width:100%}
+    .rm-video-player__theater-toolbar{height:40px;display:flex;justify-content:flex-end;align-items:center;padding-right:8px;gap:8px}
+    .rm-video-player__spacing-wrapper--capped{width:min(100%,480px)}
+    .sidebar-fixture{width:330px;max-width:100%;margin-top:12px}
+  </style>
+</head>
+<body>
+<header>Roam 原生布局回归 · 隔离测试，不包含用户笔记</header>
+<main>
+  <div class="roam-main"><div class="roam-body-main"><div class="rm-video-theater">
+    <div class="rm-iframe__spacing-wrapper rm-video-player__spacing-wrapper hoverparent rm-video-player__spacing-wrapper--theater">
+      <div class="rm-iframe__container rm-video-player__container"><div><iframe class="rm-iframe rm-video-player" title="原生剧场布局测试视频" src="https://www.youtube.com/embed/M7lc1UVf-VE?enablejsapi=1" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe></div></div>
+      <div class="rm-video-player__theater-toolbar"><span>Roam 原生视频工具栏</span><button type="button">时间戳</button></div>
+    </div>
+  </div></div></div>
+  <aside><strong>实际故障回归条件</strong><p>iframe 自身也有 rm-video-player 类；视频位于 height:0、overflow:hidden 的比例容器内。插件必须挂载在完整视频组件外部。</p><p class="fixture-note">窄屏、低高度、滚动、卸载与重新挂载都应保持按钮可见且可点击。</p></aside>
+</main>
+<script src="/roam-youtube-bilingual.js"></script>
+</body>
+</html>
