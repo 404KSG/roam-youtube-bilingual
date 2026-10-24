@@ -1,19 +1,15 @@
-import { MAX_SUBTITLE_BYTES, videoIdFromUrl, parseSubtitles, normalizeCues, activeCueIndex, formatTime, translationWindow, validateTranslations, exportMarkdown } from './core.mjs';
+import { MAX_SUBTITLE_BYTES, videoIdFromUrl, parseSubtitles, normalizeCues, activeCueIndex, formatTime, translationWindow, validateTranslations } from './core.mjs';
 import { YouTubeClock } from './clock.mjs';
-import { mountPanel } from './mount.mjs';
-import { VERSION, DEFAULT_CONFIG, PAGE_SIZE, validateConfig, configChange, cuePage, verifyHealth } from './protocol.mjs';
+import { VideoSurface } from './surface.mjs';
+import { VERSION, DEFAULT_CONFIG, validateConfig, configChange, verifyHealth } from './protocol.mjs';
 
 const STORAGE_KEY = 'roam-youtube-bilingual/session/v1';
+const commandLabel = 'YouTube 双语字幕：连接与设置';
+const videos = new Map();
 let config = { ...DEFAULT_CONFIG };
 let active = false;
-let observer;
-let scanTimer;
-let style;
-let dialog;
-let settingsRequest;
+let observer, scanTimer, surfaceTimer, settings;
 let commandRegistered = false;
-const panels = new Map();
-const commandLabel = 'YouTube 双语字幕：连接与设置';
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -21,18 +17,27 @@ function element(tag, className, text) {
   if (text !== undefined) node.textContent = text;
   return node;
 }
-function button(text, onClick, className = '') {
-  const node = element('button', className, text);
-  node.type = 'button';
-  node.addEventListener('click', onClick);
-  return node;
+function button(text, callback, className = '') {
+  const node = element('button', className, text); node.type = 'button';
+  node.addEventListener('click', callback); return node;
 }
-function saveConfig() {
-  // Pairing token is session-only; never written through roamAlphaAPI/settings.
-  try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(config)); } catch { /* Private storage may be unavailable. */ }
+function saveConfig(next) {
+  const change = configChange(config, next);
+  const serviceChanged = config.service !== next.service;
+  config = next;
+  try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(config)); } catch { /* Session-only storage is optional. */ }
+  for (const video of videos.values()) {
+    if (change !== 'display') {
+      video.turnOff();
+      if (change === 'source' || serviceChanged) video.cues = [];
+      if (change === 'source' || change === 'translation') video.translations.clear();
+      video.render();
+    }
+  }
+  syncSurfaces();
 }
 async function request(path, body, signal, cfg = config) {
-  if (!cfg.token) throw new Error('请先打开“设置”，填写本机服务配对码。导入字幕不需要配对码。');
+  if (!cfg.token) throw new Error('请先在字幕设置中填写本机服务配对码。');
   let response;
   try {
     response = await fetch(`${cfg.service}${path}`, {
@@ -43,432 +48,287 @@ async function request(path, body, signal, cfg = config) {
     });
   } catch (error) {
     if (signal?.aborted || error.name === 'AbortError') throw new DOMException('Aborted', 'AbortError');
-    if (error.name === 'TimeoutError') throw new Error('本机请求超时，请检查服务终端后重试。');
-    throw new Error('无法连接本机服务。请运行 npm start，并检查本地网络访问提示与服务端口。');
+    if (error.name === 'TimeoutError') throw new Error('字幕请求超时，请稍后重试。');
+    throw new Error('无法连接本机服务。请先运行 start.command，再检查字幕设置中的地址和配对码。');
   }
   let data;
-  try { data = await response.json(); } catch { if (signal?.aborted) throw new DOMException('Aborted', 'AbortError'); throw new Error('本机服务响应异常，请确认端口指向此插件服务。'); }
+  try { data = await response.json(); }
+  catch { if (signal?.aborted) throw new DOMException('Aborted', 'AbortError'); throw new Error('本机服务响应无效，请确认端口。'); }
   if (!response.ok) throw new Error(data?.error || `本机服务返回 HTTP ${response.status}`);
   return data;
 }
-
-function openSettings() {
-  if (dialog) { dialog.showModal(); return; }
-  dialog = element('dialog', 'ryb-settings');
-  const openedDialog = dialog;
-  dialog.addEventListener('close', () => {
-    settingsRequest?.abort(); settingsRequest = null;
-    openedDialog.remove(); if (dialog === openedDialog) dialog = null;
-  });
-  const form = element('form');
-  form.method = 'dialog';
-  const title = element('h2', '', `连接你的翻译服务 · ${VERSION}`);
-  const description = element('p', 'ryb-muted', 'API Key 写在电脑上的 .env 文件中；这里填写的是本机服务配对码。连接信息仅保留在当前窗口会话。');
+function assertTranslationReady(health) {
+  if (!health.demo && !health.apiConfigured) throw new Error('请先在本机 .env 中填写 API 地址、Key 和模型，再重启服务。也可先预览字幕显示效果。');
+}
+function disposeSettings(ref) {
+  if (!ref || ref.disposed) return;
+  ref.disposed = true; ref.request?.abort();
+  if (ref.dialog.open) ref.dialog.close();
+  ref.host.remove();
+  if (settings === ref) settings = null;
+  syncSurfaces();
+}
+function openSettings(owner = null) {
+  if (settings) { settings.dialog.focus(); return; }
+  const host = element('div', 'ryb-settings-host');
+  host.style.cssText = 'position:fixed!important;inset:0!important;pointer-events:none!important;z-index:2147483647!important;';
+  const shadow = host.attachShadow({ mode: 'open' });
+  const sheet = element('style'); sheet.textContent = STYLE;
+  const dialog = element('dialog', 'ryb-settings');
+  for (const type of ['pointerdown', 'mousedown', 'click', 'keydown']) dialog.addEventListener(type, (event) => event.stopPropagation());
+  const ref = { host, dialog, owner, disposed: false };
+  settings = ref;
+  dialog.addEventListener('close', () => disposeSettings(ref));
+  const form = element('form'); form.method = 'dialog';
+  form.addEventListener('submit', (event) => event.preventDefault());
+  form.append(element('h2', '', '视频内双语字幕'), element('p', 'ryb-muted', `${VERSION} · 原文与译文只显示在视频画面内，不在下方创建面板。`));
   const fields = {};
-  const addField = (key, label, type = 'text') => {
-    const wrapper = element('label', 'ryb-field');
-    wrapper.append(element('span', '', label));
-    const input = element('input');
-    input.name = key;
-    input.type = type;
-    input.value = config[key];
-    input.autocomplete = 'off';
-    input.spellcheck = false;
-    wrapper.append(input);
-    fields[key] = input;
-    form.append(wrapper);
-  };
-  form.append(title, description);
-  addField('service', '本机服务地址');
-  addField('token', '本机服务配对码', 'password');
-  addField('source', '原字幕语言（例如 en）');
-  addField('target', '译文语言（例如 zh-CN）');
-  const overlayLabel = element('label', 'ryb-check');
-  const overlay = element('input');
-  overlay.type = 'checkbox'; overlay.checked = config.overlay;
-  overlayLabel.append(overlay, document.createTextNode(' 在视频画面内显示双语字幕'));
-  const status = element('p', 'ryb-status'); status.setAttribute('role', 'status');
+  function field(key, label, type = 'text', options = {}) {
+    const wrapper = element('label', 'ryb-field'); wrapper.append(element('span', '', label));
+    const input = element('input'); input.name = key; input.type = type;
+    input.value = options.value ?? config[key]; input.autocomplete = 'off'; input.spellcheck = false;
+    for (const name of ['min', 'max', 'step']) if (options[name] !== undefined) input[name] = options[name];
+    fields[key] = input; wrapper.append(input); return wrapper;
+  }
+  const appearance = element('div', 'ryb-setting-grid');
+  appearance.append(field('fontScale', '字幕大小（1 为默认）', 'number', { min: '0.75', max: '1.6', step: '0.05' }), field('bottomRatio', '距底部比例（0.08 为默认）', 'number', { min: '0.02', max: '0.25', step: '0.01' }));
+  form.append(appearance);
+  const status = element('p', 'ryb-setting-status'); status.setAttribute('role', 'status');
+  const readValues = () => validateConfig({ ...Object.fromEntries(Object.entries(fields).filter(([key]) => key !== 'offset').map(([key, input]) => [key, input.value.trim()])) });
   const apply = () => {
-    const next = validateConfig({ ...Object.fromEntries(Object.entries(fields).map(([key, input]) => [key, input.value.trim()])), overlay: overlay.checked });
-    const change = configChange(config, next);
-    config = next;
-    for (const panel of panels.values()) {
-      if (change === 'source') { panel.reset(); panel.setStatus('原字幕语言已改变，请重新获取字幕。'); }
-      else if (change === 'translation') { panel.invalidateTranslation(); panel.setStatus('已保留原字幕，点击开始翻译以使用新的译文设置。'); }
-      else if (change === 'connection') { panel.stop(); panel.cancelCaptions(); panel.setStatus('配对码已更新，可重新获取或开始翻译。'); }
-      panel.positionOverlay();
-    }
-    saveConfig();
+    const next = readValues(); saveConfig(next);
+    if (owner && !owner.disposed && fields.offset) { owner.offset = Math.max(-3600, Math.min(3600, Number(fields.offset.value) || 0)); owner.render(); }
     return next;
   };
-  const actions = element('div', 'ryb-actions');
-  const connect = button('连接并检查', async () => {
-    connect.disabled = true;
-    try {
-      const next = apply();
-      settingsRequest?.abort(); settingsRequest = new AbortController();
-      const data = verifyHealth(await request('/health', undefined, settingsRequest.signal, next));
-      if (!active || !openedDialog.isConnected) return;
-      status.textContent = data.demo ? '已连接演示服务：使用预置字幕和译文，不调用真实 API。' : data.apiConfigured ? '已连接。已配置模型，实际翻译时会验证 API。' : '字幕服务已连接；请填写 .env 中的模型和 API 配置后重启。';
-    } catch (error) { if (error.name !== 'AbortError') status.textContent = error.message; }
-    finally { connect.disabled = false; }
-  }, 'ryb-primary');
-  actions.append(connect, button('保存设置', () => { try { apply(); dialog.close(); } catch (error) { status.textContent = error.message; } }), button('关闭', () => dialog.close()));
-  form.append(overlayLabel, status, actions);
-  dialog.append(form);
-  document.body.append(dialog);
-  dialog.showModal();
-}
-
-class SubtitlePanel {
-  constructor(iframe) {
-    this.iframe = iframe;
-    this.videoId = videoIdFromUrl(iframe.src);
-    this.embedId = this.videoId;
-    this.cues = [];
-    this.translations = new Map();
-    this.rows = new Map();
-    this.controllers = new Set();
-    this.generation = 0;
-    this.time = 0;
-    this.offset = 0;
-    this.currentIndex = -1;
-    this.pageStart = 0;
-    this.translating = false;
-    this.busy = false;
-    this.lastAttempt = 0;
-    this.root = element('section', 'ryb-panel');
-    this.root.setAttribute('aria-label', 'YouTube 双语字幕');
-    this.root.contentEditable = 'false';
-    const toolbar = element('div', 'ryb-toolbar');
-    toolbar.append(element('strong', 'ryb-brand', '双语字幕'));
-    toolbar.append(element('span', 'ryb-version', VERSION));
-    this.clockStatus = element('span', 'ryb-clock-status', '播放器尚未连接');
-    this.clockStatus.setAttribute('aria-live', 'polite');
-    toolbar.append(this.clockStatus, button('设置', openSettings, 'ryb-settings-button'));
-    this.status = element('p', 'ryb-status', config.token
-      ? '先获取或导入字幕，再开始翻译。若服务未启动，请运行本机 start.command。'
-      : '① 点“设置”连接本机服务 → ② 获取或导入字幕 → ③ 开始翻译。未配置服务时也可以导入字幕查看原文。');
-    this.status.setAttribute('role', 'status');
-    const actions = element('div', 'ryb-actions');
-    this.fetchButton = button('获取字幕', () => this.loadCaptions());
-    const upload = element('input', 'ryb-file');
-    upload.type = 'file'; upload.accept = '.vtt,.srt,.json3,.json';
-    upload.setAttribute('aria-label', '选择字幕文件');
-    upload.addEventListener('change', async () => {
-      const file = upload.files?.[0];
-      if (!file) return;
-      const generation = this.generation;
+  if (owner) {
+    const preview = button('预览画面内双语效果（不调用 API）', () => {
+      try { apply(); disposeSettings(ref); owner.preview(); } catch (error) { status.textContent = error.message; }
+    }, 'ryb-preview-button');
+    form.append(preview);
+  }
+  const languages = element('div', 'ryb-setting-grid');
+  languages.append(field('source', '原字幕语言，例如 en'), field('target', '译文语言，例如 zh-CN'));
+  form.append(languages, field('service', '本机字幕服务地址'), field('token', '本机服务配对码（不是 API Key）', 'password'));
+  form.append(element('p', 'ryb-muted', 'API Key 保存在本机 .env 中，不写入 Roam。先运行 start.command，再填写终端显示的配对码。翻译仅将所需原字幕发送到你配置的 API。'));
+  if (owner) {
+    const advanced = element('details', 'ryb-advanced');
+    advanced.append(element('summary', '', '字幕文件、同步与全屏'));
+    const input = element('input', 'ryb-file'); input.type = 'file'; input.accept = '.srt,.vtt,.json,.json3'; input.setAttribute('aria-label', '选择字幕文件');
+    input.addEventListener('change', async () => {
+      const file = input.files?.[0]; if (!file) return;
+      const importId = ref.importId = (ref.importId || 0) + 1;
       try {
         if (file.size > MAX_SUBTITLE_BYTES) throw new Error('字幕文件须小于 5 MB。');
         const cues = parseSubtitles(await file.text());
-        if (this.disposed || generation !== this.generation) return;
-        this.setCues(cues);
-        this.connect();
-        this.setStatus(`已导入 ${cues.length} 条字幕。点击“开始翻译”调用你的 API。`);
-      } catch (error) { this.setStatus(error.message); }
-      finally { upload.value = ''; }
+        if (ref.disposed || owner.disposed || ref.importId !== importId) return;
+        owner.turnOff(); owner.assignCues(cues);
+        status.textContent = `已导入 ${cues.length} 条字幕。点击“保存并开启双语”开始翻译。`;
+      } catch (error) { status.textContent = error.message; }
+      finally { input.value = ''; }
     });
-    this.translateButton = button('开始翻译', () => this.toggleTranslation(), 'ryb-primary');
-    this.translateButton.disabled = true;
-    actions.append(this.fetchButton, button('导入字幕', () => upload.click()), this.translateButton, upload);
-    const settingsRow = element('div', 'ryb-options');
-    const offsetLabel = element('label', '', '时间偏移（秒） ');
-    const offset = element('input'); offset.type = 'number'; offset.step = '0.5'; offset.min = '-3600'; offset.max = '3600'; offset.value = '0'; offset.setAttribute('aria-label', '字幕时间偏移，正数使字幕延后');
-    offset.addEventListener('input', () => { this.offset = Math.max(-3600, Math.min(3600, Number(offset.value) || 0)); this.update(this.time); });
-    offsetLabel.append(offset);
-    const followLabel = element('label', 'ryb-check');
-    this.follow = element('input'); this.follow.type = 'checkbox';
-    this.follow.addEventListener('change', () => this.revealCurrent());
-    followLabel.append(this.follow, document.createTextNode(' 字幕列表跟随播放'));
-    settingsRow.append(offsetLabel, followLabel);
-    this.current = element('div', 'ryb-current');
-    this.currentSource = element('p', 'ryb-source', '原文字幕将显示在这里');
-    this.currentTarget = element('p', 'ryb-target', '译文将显示在原文下方');
-    this.current.append(this.currentSource, this.currentTarget);
-    this.details = element('details', 'ryb-transcript');
-    this.summary = element('summary', '', '字幕列表');
-    this.list = element('div', 'ryb-list');
-    this.pagination = element('div', 'ryb-actions ryb-pagination');
-    this.previousPage = button('上一页', () => this.renderPage(this.pageStart - PAGE_SIZE));
-    this.nextPage = button('下一页', () => this.renderPage(this.pageStart + PAGE_SIZE));
-    this.pageLabel = element('span', 'ryb-muted');
-    this.pagination.append(this.previousPage, this.pageLabel, this.nextPage, button('定位当前句', () => this.revealCurrent(true)));
-    this.details.append(this.summary, this.list, this.pagination);
-    this.details.addEventListener('toggle', () => { if (this.details.open) this.revealCurrent(); });
-    const footer = element('div', 'ryb-actions ryb-footer');
-    footer.append(button('复制当前双语', () => this.copyCurrent()), button('导出双语 Markdown', () => this.export()), button('重新连接', () => this.reconnect()));
-    this.root.append(toolbar, actions, settingsRow, this.status, this.current, this.details, footer);
-    this.mount = mountPanel(iframe, this.root);
-    this.overlay = element('div', 'ryb-overlay');
-    this.overlay.hidden = true;
-    this.overlay.setAttribute('aria-hidden', 'true');
-    this.overlaySource = element('span', 'ryb-overlay-source');
-    this.overlayTarget = element('span', 'ryb-overlay-target');
-    this.overlay.append(this.overlaySource, this.overlayTarget);
-    document.body.append(this.overlay);
-    this.positionTimer = setInterval(() => this.positionOverlay(), 200);
+    const actions = element('div', 'ryb-actions');
+    actions.append(button('导入 SRT / VTT', () => input.click()), button('重新获取字幕', () => { owner.turnOff(); owner.cues = []; owner.translations.clear(); status.textContent = '已清除本视频缓存，下次开启时重新获取字幕。'; }));
+    const full = button('双语全屏', () => {
+      disposeSettings(ref);
+      void owner.surface.toggleFullscreen().catch((error) => owner.notice(error.message));
+    });
+    actions.append(full);
+    advanced.append(actions, input, field('offset', '时间偏移（正数让字幕延后，秒）', 'number', { min: '-3600', max: '3600', step: '0.5', value: String(owner.offset) }), element('p', 'ryb-muted', `已载入 ${owner.cues.length} 条原文，当前 ${formatTime(owner.time)}。如出现重复字幕，请关闭 YouTube 原生 CC。保持双语的全屏请使用上方按钮；YouTube 原生全屏和画中画不包含 Roam 外层字幕。`));
+    form.append(advanced);
   }
-  setStatus(text) { if (!this.disposed) this.status.textContent = text; }
+  const actions = element('div', 'ryb-actions');
+  const check = button('检查连接', async () => {
+    check.disabled = true;
+    try {
+      const next = readValues(); ref.request?.abort(); ref.request = new AbortController();
+      const health = verifyHealth(await request('/health', undefined, ref.request.signal, next));
+      if (ref.disposed) return;
+      status.textContent = health.demo ? '已连接演示服务：仅使用预置字幕和译文。' : health.apiConfigured ? '服务已连接且模型已配置。实际开启时将验证翻译 API。' : '字幕服务已连接，尚未配置翻译模型，请填写本机 .env 后重启。';
+    } catch (error) { if (error.name !== 'AbortError') status.textContent = error.message; }
+    finally { check.disabled = false; }
+  });
+  const start = button(owner ? '保存并开启双语' : '保存设置', () => {
+    try { apply(); disposeSettings(ref); if (owner && !owner.disposed) void owner.turnOn(); }
+    catch (error) { status.textContent = error.message; }
+  }, 'ryb-primary');
+  actions.append(check, start, button('关闭', () => disposeSettings(ref)));
+  form.append(status, actions); dialog.append(form); shadow.append(sheet, dialog);
+  const fs = document.fullscreenElement;
+  (fs && owner && fs.contains(owner.iframe) ? fs : document.body).append(host);
+  dialog.showModal(); syncSurfaces();
+}
+
+class VideoCaptions {
+  constructor(iframe) {
+    this.iframe = iframe;
+    this.videoId = videoIdFromUrl(iframe.src); this.embedId = this.videoId;
+    this.cues = []; this.translations = new Map(); this.epoch = 0;
+    this.enabled = false; this.loading = false; this.time = 0; this.offset = 0;
+    this.lastAttempt = 0; this.previewUntil = 0;
+    this.surface = new VideoSurface(iframe, STYLE);
+    for (const type of ['pointerdown', 'mousedown', 'click', 'keydown']) this.surface.scene.addEventListener(type, (event) => event.stopPropagation());
+    this.surface.host.dataset.version = VERSION;
+    this.surface.host.dataset.video = this.videoId;
+    this.toggleButton = button('双语', () => {
+      if (this.previewUntil) { this.previewUntil = 0; this.render(); }
+      else if (this.enabled) this.turnOff(); else void this.turnOn();
+    }, 'ryb-toggle');
+    this.toggleButton.title = '在视频画面内显示原文和译文';
+    this.optionsButton = button('⋯', () => openSettings(this), 'ryb-options');
+    this.optionsButton.setAttribute('aria-label', '字幕设置'); this.optionsButton.title = '字幕设置';
+    const controls = element('div', 'ryb-controls'); controls.append(this.toggleButton, this.optionsButton);
+    this.caption = element('div', 'ryb-captions'); this.caption.hidden = true;
+    this.caption.setAttribute('aria-label', '视频内双语字幕');
+    this.previewLabel = element('span', 'ryb-preview-label');
+    this.source = element('span', 'ryb-source'); this.target = element('span', 'ryb-target');
+    this.caption.append(this.previewLabel, this.source, this.target);
+    this.noticeBox = element('div', 'ryb-notice'); this.noticeBox.hidden = true;
+    this.noticeText = element('span'); this.noticeText.setAttribute('role', 'status');
+    const close = button('×', () => this.clearNotice(), 'ryb-dismiss'); close.setAttribute('aria-label', '关闭字幕提示');
+    this.noticeBox.append(this.noticeText, close);
+    this.surface.scene.append(controls, this.caption, this.noticeBox);
+    this.render();
+  }
+  notice(text, duration = 0) {
+    if (this.disposed) return;
+    clearTimeout(this.noticeTimer); this.noticeText.textContent = text; this.noticeBox.hidden = !text;
+    if (duration) this.noticeTimer = setTimeout(() => this.clearNotice(), duration);
+  }
+  clearNotice() { clearTimeout(this.noticeTimer); this.noticeBox.hidden = true; this.noticeText.textContent = ''; }
   connect() {
     if (this.clock) return;
-    const needsReload = new URL(this.iframe.src).searchParams.get('enablejsapi') !== '1';
-    if (needsReload) this.setStatus('首次连接会重新加载此播放器一次，以开启时间同步。');
-    this.clockStatus.textContent = '正在连接…';
-    this.clock = new YouTubeClock(this.iframe, (time) => this.update(time), (state) => { if (!this.disposed) this.clockStatus.textContent = state; }, (id) => {
-      this.reset(); this.videoId = id;
-      this.setStatus('播放器切换了视频，请重新获取或导入该视频的字幕。');
+    this.clock = new YouTubeClock(this.iframe, (time) => {
+      if (this.disposed) return;
+      this.time = time; this.render();
+      if (this.enabled && Date.now() - this.lastAttempt > 1500) void this.translateNear();
+    }, (state) => {
+      if (this.enabled && /未收到|中断/.test(state)) this.notice(state);
+    }, (id) => {
+      this.turnOff(); this.videoId = id; this.surface.host.dataset.video = id;
+      this.cues = []; this.translations.clear(); this.notice('视频已切换。点击“双语”加载新视频字幕。', 5000);
     });
   }
-  reconnect() {
-    this.clock?.destroy(); this.clock = null; this.connect();
+  assignCues(cues) {
+    if (!cues.length) throw new Error('没有可用字幕。请尝试导入 SRT / VTT。');
+    if (cues.some((cue) => cue.text.length > 5500)) throw new Error('单条字幕超过 5500 个字符，请先拆分。');
+    this.cues = cues; this.translations.clear(); this.render();
   }
-  cancelCaptions() {
-    this.captionController?.abort(); this.captionController = null;
-    this.fetchButton.disabled = false;
-  }
-  invalidateTranslation() {
-    this.stop(); this.cancelCaptions(); this.generation++;
-    this.translations.clear();
-    for (const { target } of this.rows.values()) target.textContent = '';
-    this.renderCurrent();
-  }
-  reset() {
-    this.stop(); this.cancelCaptions();
-    this.generation++;
-    for (const controller of this.controllers) controller.abort();
-    this.controllers.clear();
-    this.cues = []; this.translations.clear(); this.rows.clear();
-    this.list.replaceChildren(); this.currentIndex = -1; this.pageStart = 0;
-    this.translateButton.disabled = true;
-    this.summary.textContent = '字幕列表';
-    this.renderCurrent();
-  }
-  setCues(cues) {
-    if (cues.some((cue) => cue.text.length > 5500)) throw new Error('单条字幕超过 5500 个字符，请先拆分该条字幕后再导入。');
-    this.reset();
-    this.cues = cues;
-    this.renderPage(0);
-    this.summary.textContent = `字幕列表 · ${cues.length} 条`;
-    this.translateButton.disabled = false;
-    this.update(this.time);
-  }
-  renderPage(index) {
-    const { start, end } = cuePage(this.cues.length, index);
-    this.pageStart = start;
-    this.rows.clear();
-    const fragment = document.createDocumentFragment();
-    for (const cue of this.cues.slice(start, end)) {
-      const row = button('', () => { this.connect(); this.clock.seek(cue.start + this.offset); }, 'ryb-cue');
-      row.setAttribute('aria-label', `跳转到 ${formatTime(cue.start)}`);
-      const stamp = element('span', 'ryb-stamp', formatTime(cue.start));
-      const lines = element('span', 'ryb-cue-lines');
-      const source = element('span', 'ryb-source', cue.text);
-      const target = element('span', 'ryb-target', this.translations.get(cue.id) || '');
-      if (cue === this.cues[this.currentIndex]) row.setAttribute('aria-current', 'true');
-      lines.append(source, target); row.append(stamp, lines);
-      this.rows.set(cue.id, { row, target }); fragment.append(row);
-    }
-    this.list.replaceChildren(fragment);
-    this.list.scrollTop = 0;
-    this.previousPage.disabled = start === 0;
-    this.nextPage.disabled = end === this.cues.length;
-    this.pageLabel.textContent = this.cues.length ? `${start + 1}–${end} / ${this.cues.length}` : '尚无字幕';
-  }
-  revealCurrent(force = false) {
-    if (this.currentIndex < 0 || (!force && !this.follow.checked)) return;
-    if (force) this.details.open = true;
-    const page = cuePage(this.cues.length, this.currentIndex);
-    if (page.start !== this.pageStart) this.renderPage(page.start);
-    const row = this.rows.get(this.cues[this.currentIndex].id)?.row;
-    if (row && this.details.open) this.list.scrollTop += row.getBoundingClientRect().top - this.list.getBoundingClientRect().top - (this.list.clientHeight - row.offsetHeight) / 2;
-  }
-  async loadCaptions() {
-    if (this.fetchButton.disabled) return;
-    const controller = new AbortController();
-    this.controllers.add(controller);
-    const generation = this.generation;
-    this.captionController = controller;
-    const cfg = { ...config };
-    this.fetchButton.disabled = true;
-    this.setStatus(`正在获取 ${config.source} 字幕… YouTube 可能需要几十秒。`);
+  async turnOn() {
+    if (this.disposed || this.enabled) return;
+    if (!config.token) { openSettings(this); return; }
+    for (const video of videos.values()) if (video !== this) video.turnOff();
+    this.turnOff();
+    this.enabled = true; this.loading = true;
+    const epoch = this.epoch, cfg = { ...config }, controller = new AbortController();
+    this.startRequest = controller;
+    this.notice('正在连接字幕服务…'); this.render();
     try {
-      verifyHealth(await request('/health', undefined, controller.signal, cfg));
-      const data = await request('/v1/captions', { videoId: this.videoId, language: cfg.source }, controller.signal, cfg);
-      if (this.disposed || generation !== this.generation || controller.signal.aborted) return;
-      if (data.videoId !== this.videoId || data.language !== cfg.source) throw new Error('字幕响应与当前视频或语言不匹配，请更新本机服务。');
-      if (!Array.isArray(data.cues)) throw new Error('字幕服务没有返回有效字幕。');
-      const cues = normalizeCues(data.cues);
-      if (!cues.length) throw new Error('该视频没有可用字幕，请尝试导入文件。');
-      this.controllers.delete(controller);
-      this.setCues(cues);
-      this.connect();
-      this.setStatus(data.demo ? '【演示】已载入预置示例字幕，并非此视频真实字幕。' : `已获取 ${cues.length} 条原文字幕。点击“开始翻译”调用你的 API。`);
-    } catch (error) { if (error.name !== 'AbortError' && !controller.signal.aborted && generation === this.generation) this.setStatus(error.message); }
-    finally {
-      this.controllers.delete(controller);
-      if (this.captionController === controller) { this.captionController = null; if (!this.disposed) this.fetchButton.disabled = false; }
+      const health = verifyHealth(await request('/health', undefined, controller.signal, cfg));
+      assertTranslationReady(health);
+      if (!this.cues.length) {
+        this.notice(`正在获取 ${cfg.source} 原字幕…`);
+        const data = await request('/v1/captions', { videoId: this.videoId, language: cfg.source }, controller.signal, cfg);
+        if (this.disposed || epoch !== this.epoch || controller.signal.aborted) return;
+        if (data.videoId !== this.videoId || data.language !== cfg.source) throw new Error('字幕与当前视频或语言不匹配，请更新本机服务。');
+        this.assignCues(normalizeCues(data.cues));
+        this.demo = Boolean(data.demo);
+      } else this.demo = Boolean(health.demo);
+      if (this.disposed || epoch !== this.epoch || controller.signal.aborted) return;
+      this.connect(); this.notice('字幕已载入，正在准备画面内译文…');
+    } catch (error) {
+      if (error.name !== 'AbortError' && !controller.signal.aborted && epoch === this.epoch) { this.turnOff(); this.notice(error.message); }
+    } finally {
+      if (this.startRequest === controller) { this.startRequest = null; this.loading = false; this.render(); }
     }
   }
-  update(time) {
+  turnOff() {
+    this.epoch++; this.enabled = false; this.loading = false; this.previewUntil = 0;
+    this.startRequest?.abort(); this.startRequest = null;
+    this.translationRequest?.abort(); this.translationRequest = null;
+    this.clearNotice(); this.render();
+  }
+  preview() {
     if (this.disposed) return;
-    this.time = time;
-    const index = activeCueIndex(this.cues, time - this.offset);
-    if (index !== this.currentIndex) {
-      const old = this.cues[this.currentIndex];
-      if (old) this.rows.get(old.id)?.row.removeAttribute('aria-current');
-      this.currentIndex = index;
-      const cue = this.cues[index];
-      const row = cue && this.rows.get(cue.id)?.row;
-      if (row) {
-        row.setAttribute('aria-current', 'true');
-      }
-      this.revealCurrent();
-      this.renderCurrent();
-    }
-    if (this.translating && Date.now() - this.lastAttempt > 1500) void this.translateNear();
-    this.positionOverlay();
+    this.turnOff(); this.previewUntil = Date.now() + 8000; this.render(); syncSurfaces();
   }
-  renderCurrent() {
-    const cue = this.cues[this.currentIndex];
-    const source = cue?.text || (this.cues.length ? '当前时间没有字幕' : '原文字幕将显示在这里');
-    const target = cue ? this.translations.get(cue.id) || (this.translating ? '正在准备译文…' : '点击“开始翻译”获取译文') : '';
-    this.currentSource.textContent = source;
-    this.currentTarget.textContent = target;
-    this.overlaySource.textContent = cue?.text || '';
-    this.overlayTarget.textContent = cue ? this.translations.get(cue.id) || '' : '';
-  }
-  positionOverlay() {
-    const rect = this.iframe.getBoundingClientRect();
-    const captionY = rect.bottom - Math.min(80, rect.height * 0.22);
-    const captionX = rect.left + rect.width / 2;
-    const visible = config.overlay && !document.hidden && this.iframe.isConnected && this.currentIndex >= 0 && rect.width > 160 && rect.height > 100 && captionY > 35 && captionY < innerHeight && captionX > 0 && captionX < innerWidth && !document.fullscreenElement && !dialog?.open && document.elementFromPoint(captionX, captionY - 10) === this.iframe;
-    this.overlay.hidden = !visible;
-    if (!visible) return;
-    this.overlay.style.left = `${Math.max(0, rect.left + 12)}px`;
-    this.overlay.style.top = `${rect.top + rect.height - Math.min(80, rect.height * 0.22)}px`;
-    this.overlay.style.width = `${Math.max(0, Math.min(rect.width - 24, innerWidth - rect.left - 12))}px`;
-    this.overlay.style.fontSize = `${Math.max(13, Math.min(23, rect.width / 40))}px`;
-  }
-  toggleTranslation() {
-    if (this.translating) { this.stop(); this.setStatus('已停止自动翻译；已得到的译文仍可查看。'); return; }
-    if (!this.cues.length) return this.setStatus('请先获取或导入字幕。');
-    if (!config.token) { openSettings(); return; }
-    for (const panel of panels.values()) if (panel !== this) panel.stop();
-    this.connect();
-    this.translating = true;
-    this.translateButton.textContent = '停止翻译';
-    this.setStatus('已启动：只翻译当前播放位置附近约 90 秒的字幕。跳转后会准备新位置的译文。');
-    this.renderCurrent();
-    void this.translateNear();
-  }
-  stop() {
-    this.translating = false;
-    this.translateButton.textContent = '开始翻译';
-    this.translationController?.abort();
-    this.translationController = null;
-    this.renderCurrent();
+  render() {
+    if (!this.toggleButton || this.disposed) return;
+    const preview = this.previewUntil > Date.now();
+    if (!preview) this.previewUntil = 0;
+    this.toggleButton.textContent = preview ? '预览' : this.loading ? '加载中' : '双语';
+    this.toggleButton.setAttribute('aria-label', preview ? '关闭字幕样式预览' : this.enabled ? '关闭双语字幕' : '开启双语字幕');
+    this.toggleButton.setAttribute('aria-pressed', String(this.enabled || preview));
+    this.toggleButton.setAttribute('aria-busy', String(this.loading));
+    this.surface.host.dataset.enabled = String(this.enabled);
+    this.previewLabel.textContent = preview ? '样式预览 · 非视频字幕' : this.demo ? '演示预置字幕 · 非视频转录' : '';
+    const index = activeCueIndex(this.cues, this.time - this.offset);
+    const cue = this.cues[index];
+    const visible = preview || this.enabled && !this.loading && this.clock?.isSynchronized() && cue;
+    this.caption.hidden = !visible;
+    this.source.textContent = preview ? 'Original subtitles stay on the video.' : visible ? cue.text : '';
+    this.target.textContent = preview ? '译文直接叠在视频画面里。' : visible ? this.translations.get(cue.id) || '译文加载中…' : '';
   }
   async translateNear() {
-    if (this.busy || !this.translating || this.disposed || document.hidden || !this.clock?.isSynchronized()) return;
+    if (!this.enabled || this.loading || this.disposed || this.translationRequest || document.hidden || !this.clock?.isSynchronized()) return;
     this.lastAttempt = Date.now();
     const entries = translationWindow(this.cues, this.time - this.offset, this.translations);
     if (!entries.length) return;
-    const generation = this.generation;
-    const controller = new AbortController();
-    this.translationController = controller;
-    this.controllers.add(controller);
-    this.busy = true;
-    const cfg = { ...config };
+    const controller = new AbortController(), epoch = this.epoch, cfg = { ...config };
+    this.translationRequest = controller;
     try {
       const data = await request('/v1/translate', { entries, target: cfg.target }, controller.signal, cfg);
-      if (this.disposed || generation !== this.generation || controller.signal.aborted) return;
+      if (this.disposed || epoch !== this.epoch || controller.signal.aborted) return;
       if (data.target !== cfg.target) throw new Error('译文语言不匹配，请更新本机服务。');
-      for (const entry of validateTranslations(data.translations, entries)) {
-        this.translations.set(entry.id, entry.text);
-        const target = this.rows.get(entry.id)?.target;
-        if (target) target.textContent = entry.text;
-      }
-      this.renderCurrent();
-      this.setStatus(`${data.demo ? '【演示预置译文】' : ''}已翻译 ${this.translations.size}/${this.cues.length} 条；继续播放时按需翻译。`);
+      for (const entry of validateTranslations(data.translations, entries)) this.translations.set(entry.id, entry.text);
+      this.clearNotice(); this.render();
     } catch (error) {
-      if (error.name !== 'AbortError' && !controller.signal.aborted && generation === this.generation) { this.stop(); this.setStatus(error.message + ' 点击“开始翻译”可重试。'); }
-    } finally {
-      this.controllers.delete(controller);
-      if (this.translationController === controller) this.translationController = null;
-      this.busy = false;
-    }
-  }
-  async copyCurrent() {
-    const cue = this.cues[this.currentIndex];
-    if (!cue) return this.setStatus('请先播放到有字幕的位置。');
-    try {
-      await navigator.clipboard.writeText(exportMarkdown([cue], this.translations, this.videoId));
-      this.setStatus('已复制当前双语字幕和时间链接，可粘贴到 Roam。');
-    } catch { this.setStatus('当前窗口不允许访问剪贴板，可使用“导出双语 Markdown”。'); }
-  }
-  export() {
-    if (!this.cues.length) return this.setStatus('请先获取或导入字幕。');
-    const blob = new Blob([exportMarkdown(this.cues, this.translations, this.videoId)], { type: 'text/markdown;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = element('a'); link.href = url; link.download = `${this.videoId}.${config.target}.md`;
-    document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
-    this.setStatus(`已导出。包含 ${this.cues.length} 条原文、${this.translations.size} 条已生成译文。`);
+      if (error.name !== 'AbortError' && !controller.signal.aborted && epoch === this.epoch) { this.turnOff(); this.notice(`${error.message} 可在字幕设置中检查连接。`); }
+    } finally { if (this.translationRequest === controller) this.translationRequest = null; }
   }
   destroy() {
-    this.disposed = true;
-    this.reset();
-    clearInterval(this.positionTimer);
-    this.clock?.destroy();
-    this.mount?.dispose();
-    this.root.remove(); this.overlay.remove();
+    this.turnOff(); this.disposed = true;
+    this.clock?.destroy(); this.surface.destroy();
+    if (settings?.owner === this) disposeSettings(settings);
   }
 }
-
+function syncSurfaces() {
+  if (!active) return;
+  for (const video of videos.values()) {
+    if (video.previewUntil && Date.now() >= video.previewUntil) video.render();
+    video.surface.sync({ blocked: !!settings?.dialog.open, fontScale: config.fontScale, bottomRatio: config.bottomRatio });
+  }
+}
 function scan() {
   if (!active) return;
-  for (const [iframe, panel] of panels) {
-    if (!iframe.isConnected || !panel.root.isConnected || videoIdFromUrl(iframe.src) !== panel.embedId) {
-      panel.destroy(); panels.delete(iframe);
-    } else if (!panel.mount.isCurrent()) {
-      panel.mount.dispose();
-      panel.mount = mountPanel(iframe, panel.root);
-    }
+  for (const [iframe, video] of videos) {
+    if (!iframe.isConnected || videoIdFromUrl(iframe.src) !== video.embedId) { video.destroy(); videos.delete(iframe); }
   }
   for (const iframe of document.querySelectorAll('iframe[src]')) {
-    if (panels.has(iframe) || !videoIdFromUrl(iframe.src) || !new URL(iframe.src).pathname.startsWith('/embed/')) continue;
-    panels.set(iframe, new SubtitlePanel(iframe));
+    if (videos.has(iframe) || !videoIdFromUrl(iframe.src) || !new URL(iframe.src).pathname.startsWith('/embed/')) continue;
+    videos.set(iframe, new VideoCaptions(iframe));
   }
+  syncSurfaces();
 }
-
 function onload() {
-  onunload();
-  active = true;
+  onunload(); active = true;
   try { config = validateConfig({ ...DEFAULT_CONFIG, ...JSON.parse(sessionStorage.getItem(STORAGE_KEY) || '{}') }); } catch { config = { ...DEFAULT_CONFIG }; }
-  style = element('style'); style.dataset.ryb = 'style'; style.textContent = STYLE;
-  document.head.append(style);
   observer = new MutationObserver((records) => {
-    if (records.every((r) => r.target instanceof Element && r.target.closest('.ryb-panel,.ryb-overlay,.ryb-settings'))) return;
+    if (records.every((record) => record.target instanceof Element && record.target.closest('.ryb-surface-host,.ryb-settings-host'))) return;
     if (!scanTimer) scanTimer = setTimeout(() => { scanTimer = null; scan(); }, 100);
   });
   observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] });
+  surfaceTimer = setInterval(syncSurfaces, 120);
   if (window.roamAlphaAPI?.ui?.commandPalette) {
-    window.roamAlphaAPI.ui.commandPalette.addCommand({ label: commandLabel, callback: openSettings });
-    commandRegistered = true;
+    window.roamAlphaAPI.ui.commandPalette.addCommand({ label: commandLabel, callback: () => openSettings([...videos.values()][0] || null) }); commandRegistered = true;
   }
   scan();
 }
 function onunload() {
-  active = false;
-  observer?.disconnect(); observer = null;
-  clearTimeout(scanTimer); scanTimer = null;
-  for (const panel of panels.values()) panel.destroy();
-  panels.clear();
-  style?.remove(); style = null;
-  settingsRequest?.abort(); settingsRequest = null;
-  dialog?.remove(); dialog = null;
+  active = false; observer?.disconnect(); observer = null;
+  clearTimeout(scanTimer); scanTimer = null; clearInterval(surfaceTimer); surfaceTimer = null;
+  disposeSettings(settings);
+  for (const video of videos.values()) video.destroy(); videos.clear();
   if (commandRegistered) window.roamAlphaAPI?.ui?.commandPalette?.removeCommand({ label: commandLabel });
   commandRegistered = false;
 }
-
 export default { onload, onunload };

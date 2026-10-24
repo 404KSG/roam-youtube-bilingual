@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.0-beta.1 — In-video presentation, 2026-10-25
+
+Draft preview only. This redesign corrects the product direction: bilingual subtitles belong on the video, not in a permanent panel underneath it.
+
+- Remove the below-video panel, transcript list, pagination controls, and export UI.
+- Show a compact bilingual toggle and settings button inside the player; render the original line above the translated line near the bottom of the picture.
+- One explicit action connects, retrieves captions, and starts look-ahead translation. Merely loading the extension makes no API requests.
+- Move connection settings, subtitle size/position, file import, and timing adjustment into a modal opened on demand.
+- Isolate the UI with Shadow DOM and prevent its control events from triggering parent Roam block actions.
+- Add an explicitly labeled, API-free style preview. Preview text is never presented as a real video translation.
+- Add bilingual fullscreen for native Roam video containers, with cleanup on exit. YouTube's own iframe fullscreen and PiP remain separate and do not include the outer overlay.
+- Replace panel-focused browser tests with in-video geometry, playback, cancellation, import, lifecycle, and no-layout-change acceptance checks.
+
+Real-provider translation quality and latency still require a user-configured API. The local companion remains necessary for automatic caption retrieval; this version does not remove that dependency.
+
 ## 0.2.0-beta.2 — Native Roam layout repair, 2026-10-25
 
 Draft preview only; keep Depot PR #1509 unmerged.

@@ -1,51 +1,43 @@
-.ryb-panel,.ryb-settings{--ryb-ink:#24364a;--ryb-muted:#687b8d;--ryb-border:#d9e3eb;--ryb-paper:#f7fafc;--ryb-blue:#2869a7;--ryb-teal:#176c69;color:var(--ryb-ink);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;box-sizing:border-box}
-.ryb-panel *,.ryb-settings *{box-sizing:border-box}
-.ryb-panel{position:relative;isolation:isolate;flex:none;margin:10px 0 16px;width:100%;min-width:0;clear:both;border:1px solid var(--ryb-border);border-radius:10px;background:var(--ryb-paper);overflow:hidden;text-align:left}
-.rm-video-theater[data-ryb-theater="managed"]{overflow-y:auto;overflow-x:hidden;min-height:0;scrollbar-gutter:stable}
-.rm-video-theater[data-ryb-theater="managed"]>.rm-video-player__spacing-wrapper,.rm-video-theater[data-ryb-theater="managed"]>.rm-iframe__spacing-wrapper{flex:none}
-.ryb-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:12px 14px 8px;border-bottom:1px solid var(--ryb-border)}
-.ryb-brand{letter-spacing:.08em;font-weight:650;white-space:nowrap}
-.ryb-version{font-size:10px;color:var(--ryb-muted);white-space:nowrap}
-.ryb-clock-status{font-size:11px;color:var(--ryb-muted);flex:1}
-.ryb-panel button,.ryb-settings button{font:inherit;cursor:pointer;padding:5px 10px;border:1px solid var(--ryb-border);border-radius:5px;background:transparent;color:var(--ryb-ink);line-height:1.45}
-.ryb-panel button:hover,.ryb-settings button:hover{background:#e6eff7}
-.ryb-panel button:focus-visible,.ryb-panel input:focus-visible,.ryb-panel summary:focus-visible,.ryb-settings :focus-visible{outline:2px solid var(--ryb-blue);outline-offset:3px}
-.ryb-panel button:disabled,.ryb-settings button:disabled{cursor:wait;opacity:.5}
-.ryb-panel .ryb-primary,.ryb-settings .ryb-primary{background:var(--ryb-blue);color:#fff;border-color:var(--ryb-blue)}
-.ryb-actions{display:flex;flex-wrap:wrap;gap:7px;padding:10px 14px 0}
-.ryb-settings-button{font-size:12px!important}
-.ryb-panel input.ryb-file{display:none!important}
-.ryb-options{display:flex;flex-wrap:wrap;align-items:center;gap:14px;padding:10px 14px 0;font-size:12px;color:var(--ryb-muted)}
-.ryb-options input[type=number]{width:64px;background:transparent;border:1px solid var(--ryb-border);border-radius:4px;color:inherit;padding:3px}
-.ryb-check{display:flex;align-items:center;gap:4px;cursor:pointer}
-.ryb-status{font-size:12px;color:var(--ryb-muted);margin:10px 14px;overflow-wrap:anywhere;min-height:18px}
-.ryb-current{margin:10px 14px 14px;padding:10px 14px;border-left:3px solid var(--ryb-blue);background:#edf3f8;border-radius:0 5px 5px 0;min-height:85px}
-.ryb-source,.ryb-target{display:block;margin:0;white-space:pre-line;overflow-wrap:anywhere}
-.ryb-source{font-size:14px;line-height:1.65;color:var(--ryb-ink)}
-.ryb-target{font-size:15px;line-height:1.7;color:var(--ryb-teal);margin-top:4px;font-weight:500}
-.ryb-transcript{border-top:1px solid var(--ryb-border)}
-.ryb-transcript summary{cursor:pointer;padding:10px 14px;color:var(--ryb-muted);font-size:12px}
-.ryb-list{position:relative;max-height:330px;overflow:auto;overscroll-behavior:contain}
-.ryb-pagination{align-items:center;padding-bottom:10px;border-top:1px solid var(--ryb-border)}
-.ryb-pagination button{font-size:12px}.ryb-pagination .ryb-muted{font-variant-numeric:tabular-nums}
-.ryb-panel .ryb-cue{display:flex;width:100%;gap:14px;border:0;border-radius:0;text-align:left;padding:10px 14px;border-top:1px solid var(--ryb-border);background:transparent}
-.ryb-panel .ryb-cue[aria-current=true]{background:#e6eff7;box-shadow:inset 3px 0 0 var(--ryb-blue)}
-.ryb-cue-lines{min-width:0;flex:1}
-.ryb-stamp{font:11px/1.9 ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--ryb-blue);white-space:nowrap;padding-top:2px}
-.ryb-footer{border-top:1px solid var(--ryb-border);padding:8px 14px}
-.ryb-footer button{font-size:11px}
-.ryb-overlay{position:fixed;z-index:2147483000;pointer-events:none;display:flex;flex-direction:column;align-items:center;gap:3px;transform:translateY(-100%);text-align:center;line-height:1.4;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;max-height:45vh;overflow:hidden}
-.ryb-overlay[hidden]{display:none}
-.ryb-overlay span{display:block;max-width:95%;padding:2px 7px;background:rgba(12,20,30,.83);color:white;border-radius:3px;text-shadow:0 1px 2px #000;white-space:pre-line}
-.ryb-overlay span:empty{display:none}
-.ryb-overlay .ryb-overlay-source{font-size:.8em;color:#e0e9f1}
-.ryb-overlay .ryb-overlay-target{font-size:1em;font-weight:550}
-.ryb-settings{width:min(480px,calc(100vw - 32px));max-height:90vh;padding:24px;border:1px solid var(--ryb-border);border-radius:12px;background:var(--ryb-paper);box-shadow:0 20px 80px #142e4933;z-index:2147483647}
-.ryb-settings::backdrop{background:#10243866}
-.ryb-settings h2{font-size:19px;margin:0 0 10px;font-weight:650}
-.ryb-muted{font-size:12px;color:var(--ryb-muted)}
-.ryb-field{display:flex;flex-direction:column;gap:5px;margin:15px 0;font-size:12px}
-.ryb-field input{width:100%;border:1px solid var(--ryb-border);padding:9px 10px;border-radius:5px;font:14px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;background:transparent;color:var(--ryb-ink)}
-.ryb-settings .ryb-actions{padding:4px 0 0}.ryb-settings .ryb-status{margin:14px 0}
-@media(prefers-color-scheme:dark){.ryb-panel,.ryb-settings{--ryb-ink:#d7e4ef;--ryb-muted:#a0b1bf;--ryb-border:#3e5162;--ryb-paper:#243340;--ryb-blue:#5299d7;--ryb-teal:#8ed4c6}.ryb-current,.ryb-panel .ryb-cue[aria-current=true],.ryb-panel button:hover,.ryb-settings button:hover{background:#2e4456}}
-@media(max-width:480px){.ryb-panel .ryb-actions{gap:5px}.ryb-toolbar{flex-wrap:wrap}.ryb-current{margin:10px}.ryb-source{font-size:13px}.ryb-target{font-size:14px}}
+:host{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;color-scheme:light}
+*,*::before,*::after{box-sizing:border-box}
+[hidden]{display:none!important}
+button,input,select{font:inherit}
+button{cursor:pointer}
+button:focus-visible,input:focus-visible,summary:focus-visible{outline:2px solid #9fc2ff;outline-offset:3px}
+.ryb-scene{position:absolute;inset:0;overflow:hidden;pointer-events:none;font-family:Arial,"PingFang SC",sans-serif;--ryb-size:22px;--ryb-bottom:40px;--ryb-control-top:52px}
+.ryb-controls{position:absolute;top:var(--ryb-control-top);right:12px;display:flex;align-items:center;border:1px solid #ffffff35;border-radius:6px;background:#101820b8;box-shadow:0 1px 5px #0003;overflow:hidden;pointer-events:auto;opacity:.7;transition:opacity .12s}
+.ryb-controls:hover,.ryb-controls:focus-within{opacity:1}
+.ryb-controls button{border:0;background:transparent;color:#fff;line-height:1;padding:8px 10px;font-size:12px;min-height:30px;white-space:nowrap}
+.ryb-controls .ryb-toggle{display:flex;align-items:center;gap:6px}
+.ryb-toggle::before{content:"";width:5px;height:5px;flex:none;border-radius:50%;background:#b9c1c9}
+.ryb-toggle[aria-pressed="true"]::before{background:#8ce0be;box-shadow:0 0 5px #8ce0be55}
+.ryb-toggle[aria-busy="true"]::before{background:#f1d08b}
+.ryb-controls button:hover{background:#ffffff15}
+.ryb-controls .ryb-options{border-left:1px solid #ffffff24;padding:6px 8px;font-size:18px}
+.ryb-captions{position:absolute;left:4%;right:4%;bottom:var(--ryb-bottom);max-height:65%;display:flex;flex-direction:column;align-items:center;gap:3px;text-align:center;overflow:hidden;font-size:var(--ryb-size);line-height:1.4;text-shadow:0 1px 2px #000;pointer-events:none}
+.ryb-source,.ryb-target{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;max-width:100%;overflow:hidden;white-space:pre-line;overflow-wrap:anywhere;border-radius:3px;padding:2px 7px;background:#0b1017d9;margin:0;}
+.ryb-source{font-size:.8em;font-weight:400;color:#e0e7ef}
+.ryb-target{font-size:1em;font-weight:600;color:#fff}
+.ryb-source:empty,.ryb-target:empty,.ryb-preview-label:empty{display:none}
+.ryb-preview-label{font:10px/1.4 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;color:#ffe6b1;background:#262019df;padding:2px 6px;border-radius:3px;text-shadow:none}
+.ryb-notice{position:absolute;right:12px;top:calc(var(--ryb-control-top) + 38px);max-width:min(340px,calc(100% - 24px));display:flex;gap:8px;align-items:flex-start;border:1px solid #ffffff30;border-radius:6px;padding:9px 10px;color:#f5f7fa;background:#101820ec;font:12px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;overflow-wrap:anywhere;pointer-events:none}
+.ryb-dismiss{padding:0;border:0;color:#fff;background:none;font:17px/1 Arial,sans-serif;pointer-events:auto}
+.ryb-settings{pointer-events:auto;width:min(520px,calc(100vw - 32px));max-height:90vh;overflow:auto;margin:auto;padding:24px;border:1px solid #d4dde5;border-radius:10px;background:#f8fafc;color:#27384b;font:13px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;box-shadow:0 18px 70px #0005;text-align:left}
+.ryb-settings::backdrop{background:#0b14206b}
+.ryb-settings h2{margin:0 0 8px;font-size:20px;font-weight:650;line-height:1.4}
+.ryb-muted{margin:8px 0;color:#62748a;font-size:12px;line-height:1.65}
+.ryb-setting-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.ryb-field{display:flex;flex-direction:column;gap:5px;margin:12px 0;font-size:12px;min-width:0}
+.ryb-field input{display:block;width:100%;min-width:0;padding:8px 9px;border:1px solid #ced8e1;border-radius:4px;background:#fff;color:#27384b;font:13px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace}
+.ryb-actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 0}
+.ryb-settings button{padding:6px 10px;border:1px solid #ced8e1;border-radius:4px;color:#27384b;background:#fff;line-height:1.5}
+.ryb-settings button:hover{background:#eaf0f6}
+.ryb-settings button:disabled{opacity:.5;cursor:wait}
+.ryb-settings .ryb-primary{background:#28649a;color:#fff;border-color:#28649a}
+.ryb-settings .ryb-preview-button{width:100%;margin:4px 0 6px;border:1px dashed #86a3bd;background:#edf3f8;font-size:12px}
+.ryb-setting-status{margin:12px 0 0;color:#8b3d24;font-size:12px;overflow-wrap:anywhere;min-height:1em}
+.ryb-advanced{border-top:1px solid #d4dde5;margin-top:14px;padding-top:12px}
+.ryb-advanced summary{cursor:pointer;color:#415a72;font-size:12px}
+.ryb-file{display:none!important}
+@media(max-width:420px){.ryb-settings{padding:18px}.ryb-setting-grid{grid-template-columns:1fr;gap:0}}
+@media(prefers-reduced-motion:reduce){.ryb-controls{transition:none}}

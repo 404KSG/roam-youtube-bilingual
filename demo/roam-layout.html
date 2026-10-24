@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Roam 原生视频容器回归</title>
+  <title>Roam 画面内双语字幕验收</title>
   <style>
     *{box-sizing:border-box}body{margin:0;color:#26384a;background:white;font:14px/1.5 -apple-system,BlinkMacSystemFont,sans-serif}header{height:45px;padding:10px 16px;border-bottom:1px solid #dbe2e9}main{display:flex;height:calc(100vh - 45px);overflow:hidden}.roam-main{display:flex;flex-direction:column;position:relative;width:65%;height:100%;padding:0 8px}.roam-body-main{height:100%;min-height:0}aside{padding:20px;border-left:1px solid #dbe2e9;flex:1}button{font:inherit}.fixture-note{font-size:12px;color:#687b8d}
     /* Type/attribute form selectors must not expose the hidden import control. */
@@ -19,7 +19,7 @@
   </style>
 </head>
 <body>
-<header>Roam 原生布局回归 · 隔离测试，不包含用户笔记</header>
+<header>画面内双语字幕 · 0.3.0-beta.1 · 隔离验收，不包含用户笔记</header>
 <main>
   <div class="roam-main"><div class="roam-body-main"><div class="rm-video-theater">
     <div class="rm-iframe__spacing-wrapper rm-video-player__spacing-wrapper hoverparent rm-video-player__spacing-wrapper--theater">
@@ -27,7 +27,7 @@
       <div class="rm-video-player__theater-toolbar"><span>Roam 原生视频工具栏</span><button type="button">时间戳</button></div>
     </div>
   </div></div></div>
-  <aside><strong>实际故障回归条件</strong><p>iframe 自身也有 rm-video-player 类；视频位于 height:0、overflow:hidden 的比例容器内。插件必须挂载在完整视频组件外部。</p><p class="fixture-note">窄屏、低高度、滚动、卸载与重新挂载都应保持按钮可见且可点击。</p></aside>
+  <aside><strong>字幕必须直接在视频画面内</strong><p>视频右上角点击“双语”开启；点击“⋯”配置 API 连接，或选择不调用 API 的样式预览。</p><p>原文在上、译文在下。下方不创建任何插件面板，原生视频大小和工具栏保持不变。</p><p class="fixture-note">本页保留 Roam 的原生比例容器与裁剪规则，用于验证普通、窄屏、侧栏和双语全屏布局。演示字幕始终有明确标识。</p></aside>
 </main>
 <script src="/roam-youtube-bilingual.js"></script>
 </body>
