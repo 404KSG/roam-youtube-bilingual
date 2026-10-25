@@ -1,8 +1,20 @@
 # Changelog
 
+## 0.5.0-beta.3 — Draft preview update
+
+Updated at the user's explicit request. The PR remains Draft; this is not a stable release. Live bilingual acceptance is still blocked by observed YouTube HTTP 429 responses for target subtitles.
+
+- Replace accessibility-text capture and native-caption masking with separately downloaded English and target-language tracks.
+- Render exactly two non-wrapping rows in one shared background, with one settings icon below the video.
+- Keep the overlay hidden until the matching YouTube player's native CC control is explicitly confirmed off. Expired or unknown confirmation closes the display gate.
+- Do not change native CC when a subtitle download fails. Hide the overlay before restoring a native CC state this instance changed.
+- Prevent independent extension instances from rendering together; do not pretend that hiding an old instance unloads it.
+- Report YouTube rate limits explicitly, without a masking or AI fallback.
+- Pass 40 Node tests and 21 isolated mock-browser checks. These do not establish successful live subtitle downloads.
+
 ## 0.5.0-beta.1 — Development candidate, not deployed
 
-Live desktop acceptance is pending. Keep the published 0.4.0 Draft unchanged until that gate passes.
+This candidate was not deployed. Its masking approach was replaced in 0.5.0-beta.3 after the duplicate-caption report.
 
 - Move the single settings icon into the native below-video toolbar.
 - Flatten source and translated captions into exactly two non-wrapping rows, sharing one opaque background and a one-pixel row gap.
