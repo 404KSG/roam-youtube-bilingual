@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { captionDownloadError } from './captions.mjs';
 const execute = promisify(execFile);
 const LANGUAGE = /^[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})*$/;
 
@@ -47,7 +48,11 @@ export async function fetchVideoInfo(videoId, signal) {
   } catch (error) {
     if (error.name === 'AbortError') throw error;
     if (error.code === 'ENOENT') throw new Error('未找到 yt-dlp，请先准备本机字幕服务。');
-    if (error.stderr || error.killed) throw new Error('无法获取 YouTube 支持的语言列表，请稍后重试。');
+    if (error.stderr || error.killed) {
+      const failure = captionDownloadError(error);
+      if (failure.code === 'YOUTUBE_RATE_LIMITED') throw failure;
+      throw Object.assign(new Error('无法获取 YouTube 支持的语言列表，请稍后重试。'), { code: 'YOUTUBE_METADATA_FAILED' });
+    }
     throw error;
   }
 }

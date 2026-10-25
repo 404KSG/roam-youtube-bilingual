@@ -30,6 +30,58 @@ test('captions require a video-supported target and cache actual tracks by video
   assert.equal(infos, 1); assert.equal(captions, 2);
   assert.equal((await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'de' }))).status, 400);
 });
+test('target-first loading batches both tracks and the source request hits cache', async (t) => {
+  const batches = [];
+  const base = await fixture(t, { captionFetcher: undefined, captionBatchFetcher: async (_id, languages) => {
+    batches.push(languages);
+    return { tracks: Object.fromEntries(languages.map(language => [language, [{ id: 0, start: 0, end: 2, text: language }]])) };
+  } });
+  const target = await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'zh-Hans' }));
+  const source = await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'en' }));
+  assert.equal(target.status, 200); assert.equal(source.status, 200);
+  assert.deepEqual(batches, [['en', 'zh-Hans']]);
+});
+test('a partial successful source is cached even when the target batch hits 429', async (t) => {
+  let calls = 0;
+  const base = await fixture(t, { captionFetcher: undefined, captionBatchFetcher: async () => {
+    calls++;
+    return { tracks: { en: [{ id: 0, start: 0, end: 2, text: 'English' }] }, error: Object.assign(new Error('limited'), { code: 'YOUTUBE_RATE_LIMITED', status: 429 }) };
+  } });
+  assert.equal((await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'zh-Hans' }))).status, 429);
+  assert.equal((await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'en' }))).status, 200);
+  assert.equal(calls, 1);
+});
+test('cached captions remain available while another language is downloading', async (t) => {
+  let release, started;
+  const waiting = new Promise(resolve => { release = resolve; });
+  const active = new Promise(resolve => { started = resolve; });
+  const base = await fixture(t, { captionFetcher: async (_id, language) => {
+    if (language === 'zh-Hans') { started(); await waiting; }
+    return [{ id: 0, start: 0, end: 1, text: language }];
+  } });
+  await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'en' }));
+  const pending = fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'zh-Hans' }));
+  await active;
+  try {
+    const cached = await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'en' }));
+    assert.equal(cached.status, 200, 'a local busy state must not masquerade as YouTube 429');
+  } finally { release(); await pending; }
+});
+test('real upstream 429 has a typed cooldown without automatic retries', async (t) => {
+  let calls = 0, now = 0;
+  const base = await fixture(t, { now: () => now, cooldownMs: 1000, captionFetcher: async () => {
+    calls++; throw Object.assign(new Error('YouTube 限流'), { status: 429, code: 'YOUTUBE_RATE_LIMITED' });
+  } });
+  const first = await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'en' }));
+  assert.equal(first.status, 429);
+  const second = await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'en' }));
+  assert.equal(second.status, 429); assert.equal(calls, 1);
+  assert.equal((await second.json()).code, 'YOUTUBE_RATE_LIMITED');
+  assert.equal(second.headers.get('retry-after'), '1');
+  now = 1001;
+  await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'en' }));
+  assert.equal(calls, 2);
+});
 test('native CC state requires same-user verification and only reports an explicit off state', async (t) => {
   let verified = false, read = false;
   const base = await fixture(t, { verifyPeer: async (socket) => { assert.ok(socket.remotePort); verified = true; }, nativeCcReader: { read: async ({ title, frame: actualFrame }) => { assert.equal(verified, true); read = true; assert.equal(title, info.title); assert.deepEqual(actualFrame, frame); return { state: 'off' }; } } });

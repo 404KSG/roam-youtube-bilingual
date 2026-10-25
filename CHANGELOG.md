@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.0-beta.4 — YouTube 字幕请求优化
+
+仅参考 FluentRead 的 YouTube 字幕机制并独立实现，不移植其他功能、GPL 源码、浏览器权限或外部翻译服务。
+
+- 相同视频/语种请求合并；不同下载有界串行排队，缓存命中优先。不再把本机忙碌误报为 YouTube 429。
+- 首次缺少两条轨道时合并为一次 yt-dlp 提取；一条失败时保留另一条成功结果，但不以原文冒充译文。
+- 真正的上游 429 触发本机 60 秒保护性冷却，不自动重试；错误保留分类及重试提示，不承诺上游届时恢复。
+- 按订阅者取消元数据请求；换视频使旧请求失效；关闭设置不误杀仍在开启的双语流程。
+- 保留严格两行、共用背景、一个底部图标、三项设置和原生 CC 关闭确认。
+- 59 项 Node 测试通过。该版本减少请求放大，不代表真实 YouTube 429 已解除。
+
 ## 0.5.0-beta.3 — Draft preview update
 
 Updated at the user's explicit request. The PR remains Draft; this is not a stable release. Live bilingual acceptance is still blocked by observed YouTube HTTP 429 responses for target subtitles.

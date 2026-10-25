@@ -4,7 +4,8 @@ import { existsSync } from 'node:fs';
 import { parseEnv } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
-import { fetchCaptions } from './captions.mjs';
+import { fetchCaptionTracks } from './captions.mjs';
+import { createRequestPool } from './request-pool.mjs';
 import { fetchVideoInfo } from './video-info.mjs';
 import { createCaptionReader, createPeerVerifier, validRect } from './caption-reader.mjs';
 import { VERSION, SERVICE_ID, API_VERSION } from '../src/protocol.mjs';
@@ -23,11 +24,33 @@ async function readJSON(request) {
   }
   try { return JSON.parse(Buffer.concat(chunks).toString()); } catch { throw Object.assign(new Error('JSON 格式无效。'), { status: 400 }); }
 }
-export function makeServer({ port = 17321, captionFetcher = fetchCaptions, infoFetcher = fetchVideoInfo, nativeCcReader = createCaptionReader(), verifyPeer = createPeerVerifier() } = {}) {
-  const infos = new Map(), captions = new Map();
-  let fetching = false;
-  const cache = (map, key, value) => { map.set(key, value); while (map.size > 20) map.delete(map.keys().next().value); return value; };
-  const getInfo = async (id, signal) => infos.get(id) || cache(infos, id, await infoFetcher(id, signal));
+export function makeServer({ port = 17321, captionFetcher, captionBatchFetcher = fetchCaptionTracks, infoFetcher = fetchVideoInfo, nativeCcReader = createCaptionReader(), verifyPeer = createPeerVerifier(), now = Date.now, cooldownMs = 60000 } = {}) {
+  const requests = createRequestPool({ now, cooldownMs });
+  const getInfo = (id, signal) => requests.request(`info:${id}`, sharedSignal => infoFetcher(id, sharedSignal), signal);
+  const trackKey = (id, language) => `caption:${id}:${language}`;
+  // Retain the single-track injection seam for embedders/tests. Production uses
+  // the batch downloader, extracting video metadata only once for both tracks.
+  const readTracks = captionFetcher ? async (id, languages, signal) => {
+    const tracks = {};
+    for (const language of languages) {
+      try { tracks[language] = await captionFetcher(id, language, signal); }
+      catch (error) { return { tracks, error }; }
+    }
+    return { tracks };
+  } : captionBatchFetcher;
+  const getCaptions = (info, target, signal) => requests.request(trackKey(info.videoId, target), async sharedSignal => {
+    const missing = [...new Set([info.sourceLanguage, target])].filter(language => requests.peek(trackKey(info.videoId, language)) === undefined);
+    if (missing.length) {
+      const result = await readTracks(info.videoId, missing, sharedSignal);
+      sharedSignal.throwIfAborted();
+      for (const language of missing) {
+        const cues = result.tracks?.[language];
+        if (Array.isArray(cues) && cues.length) requests.prime(trackKey(info.videoId, language), cues);
+      }
+      if (missing.some(language => requests.peek(trackKey(info.videoId, language)) === undefined)) throw result.error || new Error('YouTube 暂未提供完整的所选字幕轨道。');
+    }
+    return requests.peek(trackKey(info.videoId, target));
+  }, signal);
   const server = createServer(async (req, res) => {
     const json = (status, data) => { if (!res.destroyed) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(data)); } };
     const actualPort = server.address()?.port || port;
@@ -65,23 +88,24 @@ export function makeServer({ port = 17321, captionFetcher = fetchCaptions, infoF
         const state = ['on', 'off', 'unknown'].includes(result?.state) ? result.state : 'unknown';
         return json(200, { videoId: body.videoId, state });
       }
-      if (fetching) return json(429, { error: '正在获取字幕信息，请稍后重试。' });
-      fetching = true;
-      try {
-        const info = await getInfo(body.videoId, controller.signal);
-        if (path === '/v1/youtube/video-info') return json(200, info);
-        if (!info.sourceLanguage) return json(422, { error: '该视频没有可用的英文原字幕。' });
-        const target = body.target;
-        if (!/^[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})*$/.test(target || '') || (target !== info.sourceLanguage && !info.languages.some((language) => language.code === target))) return json(400, { error: '该视频未提供所选字幕语言。' });
-        const key = `${body.videoId}:${target}`;
-        const cues = captions.get(key) || cache(captions, key, await captionFetcher(body.videoId, target, controller.signal));
-        return json(200, { videoId: body.videoId, language: target, cues });
-      } finally { fetching = false; }
+      if (path === '/v1/youtube/captions' && !/^[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})*$/.test(body.target || '')) return json(400, { error: '字幕语言无效。' });
+      const info = await getInfo(body.videoId, controller.signal);
+      if (path === '/v1/youtube/video-info') return json(200, info);
+      if (!info.sourceLanguage) return json(422, { error: '该视频没有可用的英文原字幕。' });
+      const target = body.target;
+      if (target !== info.sourceLanguage && !info.languages.some((language) => language.code === target)) return json(400, { error: '该视频未提供所选字幕语言。' });
+      const cues = await getCaptions(info, target, controller.signal);
+      return json(200, { videoId: body.videoId, language: target, cues });
     } catch (error) {
       if (error.name === 'AbortError') return;
-      json(error.status || 422, { error: error.name === 'TimeoutError' ? '请求超时，请重试。' : error.message });
+      const codes = new Set(['YOUTUBE_RATE_LIMITED', 'YOUTUBE_DOWNLOAD_FAILED', 'YOUTUBE_METADATA_FAILED', 'LOCAL_QUEUE_FULL']);
+      const code = codes.has(error.code) ? error.code : error.name === 'TimeoutError' ? 'REQUEST_TIMEOUT' : 'SUBTITLE_REQUEST_FAILED';
+      const retryAfterSeconds = code === 'YOUTUBE_RATE_LIMITED' && Number.isFinite(error.retryAfterSeconds) ? Math.max(1, Math.min(3600, Math.ceil(error.retryAfterSeconds))) : undefined;
+      if (retryAfterSeconds) res.setHeader('Retry-After', String(retryAfterSeconds));
+      json(error.status || (code === 'REQUEST_TIMEOUT' ? 504 : 422), { error: code === 'REQUEST_TIMEOUT' ? '请求超时，请稍后手动重试。' : error.message, code, ...(retryAfterSeconds ? { retryAfterSeconds } : {}) });
     }
   });
+  server.once('close', () => requests.close());
   server.requestTimeout = 90000; server.headersTimeout = 10000;
   return server;
 }

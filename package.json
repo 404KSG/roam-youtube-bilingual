@@ -1,6 +1,6 @@
 {
   "name": "roam-youtube-bilingual",
-  "version": "0.5.0-beta.3",
+  "version": "0.5.0-beta.4",
   "private": true,
   "type": "module",
   "description": "Roam Research 双语 YouTube 字幕插件与本机 API 服务",

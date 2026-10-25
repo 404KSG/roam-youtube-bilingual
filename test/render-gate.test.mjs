@@ -8,10 +8,10 @@ import { singleLine } from '../src/protocol.mjs';
 // Exercise the real controller methods without constructing browser DOM.
 const source = await readFile(new URL('../src/extension.mjs', import.meta.url), 'utf8');
 const controller = source.slice(source.indexOf('class VideoCaptions {'), source.indexOf('\nfunction scan()'));
-function harness() {
+function harness({ request = async () => ({ ok: true }) } = {}) {
   const commands = [], videos = new Map();
-  const context = { videos, config: { target: 'zh-Hans' }, AbortController, clearTimeout, activeCueIndex, singleLine,
-    verifyHealth: data => data, request: async () => ({ ok: true }) };
+  const context = { videos, config: { target: 'zh-Hans' }, AbortController, DOMException, clearTimeout, activeCueIndex, singleLine,
+    verifyHealth: data => data, request };
   const Controller = vm.runInNewContext(`${controller}; VideoCaptions`, context);
   const video = Object.create(Controller.prototype);
   Object.assign(video, { enabled: false, loading: false, disposed: false, epoch: 0, videoId: 'vif8NQcjVf0',
@@ -59,6 +59,43 @@ test('English and translated cues use their own independent time boundaries', ()
   video.updatePair();
   assert.equal(video.pair.source, 'English sentence');
   assert.equal(video.pair.target, '当前译文');
+});
+
+test('the last metadata subscriber cancels the underlying request', async () => {
+  let resolve, upstream;
+  const { video } = harness({ request: (_path, _body, signal) => { upstream = signal; return new Promise(yes => { resolve = yes; }); } });
+  delete video.loadInfo;
+  const abort = new AbortController(), pending = video.loadInfo(abort.signal);
+  abort.abort();
+  try { assert.equal(upstream.aborted, true); }
+  finally { resolve({ videoId: video.videoId, languages: [] }); await pending.catch(() => {}); }
+});
+
+test('closing one metadata consumer does not cancel another active consumer', async () => {
+  let resolve, calls = 0, upstream;
+  const { video } = harness({ request: (_path, _body, signal) => { calls++; upstream = signal; return new Promise(yes => { resolve = yes; }); } });
+  delete video.loadInfo;
+  const abort = new AbortController();
+  const first = video.loadInfo(abort.signal), second = video.loadInfo();
+  abort.abort(); assert.equal(upstream.aborted, false);
+  resolve({ videoId: video.videoId, languages: [] });
+  const results = await Promise.allSettled([first, second]);
+  assert.equal(results[0].status, 'rejected'); assert.equal(results[1].status, 'fulfilled'); assert.equal(calls, 1);
+});
+
+test('a video switch starts fresh metadata and discards the previous late response', async () => {
+  const pending = [];
+  const { video } = harness({ request: (_path, body) => new Promise(resolve => pending.push({ id: body.videoId, resolve })) });
+  delete video.loadInfo;
+  const old = video.loadInfo();
+  video.videoChanged('dQw4w9WgXcQ');
+  const current = video.loadInfo();
+  try { assert.equal(pending.length, 2); }
+  finally {
+    for (const item of [...pending].reverse()) item.resolve({ videoId: item.id, languages: [] });
+    await Promise.allSettled([old, current]);
+  }
+  assert.equal(video.info.videoId, 'dQw4w9WgXcQ');
 });
 
 test('an expired CC-off confirmation cannot keep the overlay visible', () => {

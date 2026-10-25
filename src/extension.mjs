@@ -33,11 +33,15 @@ async function request(path, body, signal) {
     });
   } catch (error) {
     if (signal?.aborted || error.name === 'AbortError') throw new DOMException('Aborted', 'AbortError');
-    throw new Error('本机字幕服务未连接，请运行新版 start.command。');
+    if (error.name === 'TimeoutError') throw Object.assign(new Error('字幕请求超时，请稍后手动重试。'), { code: 'REQUEST_TIMEOUT' });
+    throw Object.assign(new Error('本机字幕服务未连接，请运行新版 start.command。'), { code: 'SERVICE_UNREACHABLE' });
   }
   let data;
   try { data = await response.json(); } catch { throw new Error('本机字幕服务响应无效。'); }
-  if (!response.ok) throw new Error(data?.error || `字幕服务返回 HTTP ${response.status}`);
+  if (!response.ok) throw Object.assign(new Error(data?.error || `字幕服务返回 HTTP ${response.status}`), {
+    status: response.status, code: typeof data?.code === 'string' ? data.code : 'HTTP_ERROR',
+    ...(Number.isFinite(data?.retryAfterSeconds) ? { retryAfterSeconds: Math.max(1, Math.min(3600, data.retryAfterSeconds)) } : {}),
+  });
   return data;
 }
 function languageName(language) {
@@ -134,21 +138,51 @@ class VideoCaptions {
   }
   updateIcon() { this.toolbarButton.dataset.active = String(this.enabled); this.toolbarButton.dataset.loading = String(this.loading); this.toolbarButton.setAttribute('aria-busy', String(this.loading)); }
   notice(message, duration = 0) { if (this.disposed) return; clearTimeout(this.noticeTimer); this.noticeBox.textContent = message; this.noticeBox.hidden = !message; if (duration) this.noticeTimer = setTimeout(() => { this.noticeBox.hidden = true; }, duration); }
-  async loadInfo() {
+  cancelInfo() {
+    const task = this.infoTask; this.infoTask = null; task?.abort.abort();
+  }
+  async loadInfo(signal) {
+    signal?.throwIfAborted();
     if (this.info) return this.info;
-    if (!this.infoPromise) {
-      this.infoAbort = new AbortController();
-      this.infoPromise = request('/v1/youtube/video-info', { videoId: this.videoId }, this.infoAbort.signal).then((info) => {
-        if (this.disposed || info.videoId !== this.videoId || !Array.isArray(info.languages)) throw new Error('当前视频信息已改变。');
+    const videoId = this.videoId;
+    if (this.infoTask && (this.infoTask.videoId !== videoId || this.infoTask.abort.signal.aborted)) this.cancelInfo();
+    if (!this.infoTask) {
+      const task = this.infoTask = { videoId, abort: new AbortController(), waiters: new Set(), settled: false };
+      let response;
+      try { response = request('/v1/youtube/video-info', { videoId }, task.abort.signal); }
+      catch (error) { response = Promise.reject(error); }
+      task.promise = Promise.resolve(response).then(info => {
+        if (this.disposed || this.infoTask !== task || task.abort.signal.aborted || this.videoId !== videoId) throw new DOMException('Aborted', 'AbortError');
+        if (info.videoId !== videoId || !Array.isArray(info.languages)) throw new Error('当前视频信息已改变。');
         this.info = info; return info;
-      }).finally(() => { this.infoPromise = null; });
+      }).finally(() => { task.settled = true; if (this.infoTask === task) this.infoTask = null; });
     }
-    return this.infoPromise;
+    const task = this.infoTask;
+    return new Promise((resolve, reject) => {
+      const waiter = {};
+      const finish = (error, value) => {
+        if (!task.waiters.delete(waiter)) return;
+        signal?.removeEventListener('abort', cancel); task.abort.signal.removeEventListener('abort', cancel);
+        if (error) reject(error); else resolve(value);
+      };
+      const cancel = () => {
+        finish(new DOMException('Aborted', 'AbortError'));
+        if (!task.waiters.size && !task.settled) {
+          if (this.infoTask === task) this.infoTask = null;
+          task.abort.abort();
+        }
+      };
+      task.waiters.add(waiter);
+      signal?.addEventListener('abort', cancel, { once: true }); task.abort.signal.addEventListener('abort', cancel, { once: true });
+      task.promise.then(value => finish(null, value), error => finish(error));
+      if (signal?.aborted || task.abort.signal.aborted) cancel();
+    });
   }
   async loadTrack(language, signal) {
     if (this.tracks.has(language)) return this.tracks.get(language);
     const data = await request('/v1/youtube/captions', { videoId: this.videoId, target: language }, signal);
-    if (data.videoId !== this.videoId || data.language !== language) throw new Error('字幕与当前视频或语言不匹配。');
+    signal?.throwIfAborted();
+    if (this.disposed || data.videoId !== this.videoId || data.language !== language) throw new Error('字幕与当前视频或语言不匹配。');
     const cues = normalizeCues(data.cues);
     if (!cues.length) throw new Error('所选字幕没有有效时间轴。');
     this.tracks.set(language, cues); return cues;
@@ -160,7 +194,7 @@ class VideoCaptions {
     }, (id) => this.videoChanged(id), { onApiChange: () => this.closeNativeGate(), onIframeLoad: () => this.closeNativeGate() });
   }
   videoChanged(id) {
-    this.closeNativeGate(); this.turnOff(); this.videoId = id; this.info = null; this.tracks.clear();
+    this.cancelInfo(); this.closeNativeGate(); this.turnOff(); this.videoId = id; this.info = null; this.tracks.clear();
     this.notice('视频已切换，请重新开启双语。', 4000);
   }
   async turnOn() {
@@ -174,8 +208,10 @@ class VideoCaptions {
       const info = await this.loadInfo(abort.signal);
       if (!info.sourceLanguage) throw new Error('该视频没有可用的英文原字幕。');
       if (!info.languages.some((item) => item.code === config.target)) throw new Error('请在设置中选择本视频支持的译文语言。');
-      await this.loadTrack(info.sourceLanguage, abort.signal);
+      // Request the target first: the helper batches missing English + target
+      // tracks in one extraction. The following source request reuses its cache.
       await this.loadTrack(config.target, abort.signal);
+      await this.loadTrack(info.sourceLanguage, abort.signal);
       if (this.disposed || epoch !== this.epoch || abort.signal.aborted) return;
       this.connect(); this.closeNativeGate(); this.notice('正在关闭原生 CC 并确认状态…');
     } catch (error) {
@@ -264,7 +300,7 @@ class VideoCaptions {
     this.mountToolbar(); this.surface.sync({ blocked: !!settings });
     this.drawPair(); void this.checkNativeCc();
   }
-  destroy() { this.turnOff(); this.disposed = true; this.infoAbort?.abort(); this.clock?.destroy(); this.surface.destroy(); this.toolbarButton.remove(); this.fallback?.remove(); if (settings?.owner === this) closeSettings(); }
+  destroy() { this.turnOff(); this.disposed = true; this.cancelInfo(); this.clock?.destroy(); this.surface.destroy(); this.toolbarButton.remove(); this.fallback?.remove(); if (settings?.owner === this) closeSettings(); }
 }
 function scan() {
   if (!active) return;

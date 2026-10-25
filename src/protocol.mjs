@@ -1,4 +1,4 @@
-export const VERSION = '0.5.0-beta.3';
+export const VERSION = '0.5.0-beta.4';
 export const SERVICE_ID = 'roam-youtube-bilingual';
 export const API_VERSION = 3;
 export const SERVICE_URL = 'http://127.0.0.1:17321';
