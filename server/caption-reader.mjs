@@ -23,10 +23,18 @@ export function nativeCcState(snapshot, { title, frame }) {
   const player = elements.filter((entry) => entry.role === 'AXWebArea' && /YouTube\s*$/i.test(entry.label || '') && normalizedTitle(entry.label) === normalizedTitle(title) && validRect(rectOf(entry.frame)))
     .map((entry) => ({ entry, score: overlap(frame, rectOf(entry.frame)) })).filter((candidate) => candidate.score > 0.72).sort((a, b) => b.score - a.score)[0]?.entry;
   if (!player) return 'unknown';
-  const playerRect = rectOf(player.frame);
+  const playerRect = rectOf(player.frame), byIndex = new Map(elements.map(entry => [entry.element_index, entry]));
+  const belongsToPlayer = (entry) => {
+    const visited = new Set();
+    while (entry && !visited.has(entry.element_index)) {
+      if (entry.element_index === player.element_index) return true;
+      visited.add(entry.element_index); entry = byIndex.get(entry.parent_index);
+    }
+    return false;
+  };
   const checkbox = elements.find((entry) => {
     const rect = rectOf(entry.frame), cx = rect && rect.x + rect.width / 2, cy = rect && rect.y + rect.height / 2;
-    return entry.role === 'AXCheckBox' && rect && rect.width > 0 && rect.height > 0 && Number.isFinite(cx) && Number.isFinite(cy) && cx >= playerRect.x && cx <= playerRect.x + playerRect.width && cy >= playerRect.y && cy <= playerRect.y + playerRect.height;
+    return entry.role === 'AXCheckBox' && belongsToPlayer(entry) && rect && rect.width > 0 && rect.height > 0 && Number.isFinite(cx) && Number.isFinite(cy) && cx >= playerRect.x && cx <= playerRect.x + playerRect.width && cy >= playerRect.y && cy <= playerRect.y + playerRect.height;
   });
   if (!checkbox) return 'unknown';
   const label = String(checkbox.label || checkbox.value || '').trim();

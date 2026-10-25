@@ -21,6 +21,11 @@ test('native CC state accepts only the explicit new YouTube labels for the exact
   assert.equal(nativeCcState(fixture(), { title: 'Other video', frame }), 'unknown');
   assert.equal(nativeCcState({ elements: fixture().elements.filter((entry) => entry.role !== 'AXCheckBox') }, { title: 'Test video', frame }), 'unknown');
 });
+test('a Roam checkbox overlapping the video cannot falsely confirm native CC off', () => {
+  const snapshot = fixture('Subtitles/CC turned on');
+  snapshot.elements.unshift(node(99, 1, 'AXCheckBox', 'Subtitles/CC turned off', { x: 820, y: 500, w: 30, h: 30 }));
+  assert.equal(nativeCcState(snapshot, { title: 'Test video', frame }), 'on');
+});
 test('video metadata uses the supplied language list and removes raw URLs', () => {
   const info = sanitizeVideoInfo({ id: 'vif8NQcjVf0', title: 'Test video', subtitles: { en: [{ ext: 'json3', name: 'English', url: 'https://www.youtube.com/api/timedtext?lang=en' }] }, automatic_captions: { ja: [{ name: 'Japanese', url: 'https://www.youtube.com/?secret=not-returned' }], 'zh-Hans': [{ name: 'Chinese (Simplified)' }], 'en-orig': [{}], bad: [] } }, 'vif8NQcjVf0');
   assert.equal(info.sourceLanguage, 'en');

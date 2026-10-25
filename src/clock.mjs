@@ -107,6 +107,7 @@ export class YouTubeClock {
     // read-only native-state bridge confirms that CC is actually off.
     this.command('unloadModule', ['captions']);
   }
+  restoreCaptions() { this.command('loadModule', ['captions']); }
   isSynchronized() {
     // Paused/ended/cued players need not emit periodic time packets.
     return !this.destroyed && this.hasTime && (this.state !== 1 || this.now() - this.lastTimeMessage < 5000);

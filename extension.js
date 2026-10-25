@@ -238,6 +238,7 @@ class YouTubeClock {
     // read-only native-state bridge confirms that CC is actually off.
     this.command('unloadModule', ['captions']);
   }
+  restoreCaptions() { this.command('loadModule', ['captions']); }
   isSynchronized() {
     // Paused/ended/cued players need not emit periodic time packets.
     return !this.destroyed && this.hasTime && (this.state !== 1 || this.now() - this.lastTimeMessage < 5000);
@@ -479,7 +480,7 @@ function toolbarIcon() {
 class VideoCaptions {
   constructor(iframe) {
     this.iframe = iframe; this.videoId = videoIdFromUrl(iframe.src); this.embedId = this.videoId;
-    this.tracks = new Map(); this.time = 0; this.epoch = 0; this.enabled = false; this.loading = false; this.ccState = 'unknown';
+    this.tracks = new Map(); this.time = 0; this.epoch = 0; this.enabled = false; this.loading = false; this.ccState = 'unknown'; this.ccVerifiedAt = 0; this.nativeWasOn = null; this.nativeChanged = false;
     this.surface = new VideoSurface(iframe, STYLE); this.surface.host.dataset.version = VERSION;
     this.box = el('div', 'ryb-caption-box'); this.box.hidden = true; this.box.setAttribute('aria-label', '双语字幕');
     this.source = el('div', 'ryb-line ryb-source'); this.source.dir = 'ltr';
@@ -533,7 +534,7 @@ class VideoCaptions {
     }, (id) => this.videoChanged(id), { onApiChange: () => this.closeNativeGate(), onIframeLoad: () => this.closeNativeGate() });
   }
   videoChanged(id) {
-    this.closeNativeGate(); this.turnOff(); this.videoId = id; this.embedId = id; this.info = null; this.tracks.clear();
+    this.closeNativeGate(); this.turnOff(); this.videoId = id; this.info = null; this.tracks.clear();
     this.notice('视频已切换，请重新开启双语。', 4000);
   }
   async turnOn() {
@@ -557,25 +558,23 @@ class VideoCaptions {
   }
   clearPair() { this.pair = null; this.box.hidden = true; this.source.textContent = ''; this.target.textContent = ''; }
   closeNativeGate() {
-    this.ccState = 'unknown'; this.ccRequest?.abort(); this.ccRequest = null; this.clearPair();
-    this.clock?.unloadCaptions(); this.nextCcCheck = 0;
+    this.ccState = 'unknown'; this.ccVerifiedAt = 0; this.ccRequest?.abort(); this.ccRequest = null; this.clearPair();
+    this.nextCcCheck = 0;
   }
   turnOff() {
     this.epoch++; this.enabled = false; this.loading = false;
     this.startRequest?.abort(); this.startRequest = null; this.ccRequest?.abort(); this.ccRequest = null;
-    this.ccState = 'unknown'; this.clock?.unloadCaptions(); this.clearPair(); clearTimeout(this.noticeTimer); this.noticeBox.hidden = true; this.updateIcon();
+    this.ccState = 'unknown'; this.ccVerifiedAt = 0; this.clearPair();
+    // Never switch native CC merely because a download failed or a dialog closed.
+    // Restore only a state this instance positively observed and then changed.
+    if (this.nativeChanged && this.nativeWasOn === true) this.clock?.restoreCaptions();
+    this.nativeChanged = false; this.nativeWasOn = null;
+    clearTimeout(this.noticeTimer); this.noticeBox.hidden = true; this.updateIcon();
   }
   async changeTarget() {
-    this.clearPair(); this.closeNativeGate();
-    if (!this.enabled || this.loading || !this.info) return;
-    this.epoch++; const epoch = this.epoch; const abort = this.startRequest = new AbortController(); this.loading = true; this.updateIcon(); this.notice('正在下载所选译文字幕…');
-    try {
-      await this.loadTrack(config.target, abort.signal);
-      if (this.disposed || epoch !== this.epoch || abort.signal.aborted) return;
-      this.closeNativeGate(); this.notice('正在关闭原生 CC 并确认状态…');
-    } catch (error) {
-      if (error.name !== 'AbortError' && epoch === this.epoch) { this.turnOff(); this.lastError = error.message; this.notice(error.message); }
-    } finally { if (this.startRequest === abort) { this.startRequest = null; this.loading = false; this.updateIcon(); } }
+    const restart = this.enabled;
+    this.turnOff();
+    if (restart) await this.turnOn();
   }
   screenFrame() {
     const rect = this.iframe.getBoundingClientRect();
@@ -585,30 +584,37 @@ class VideoCaptions {
   async checkNativeCc() {
     if (!this.enabled || this.loading || this.disposed || this.ccRequest || settings || document.hidden || this.surface.host.style.display === 'none' || Date.now() < (this.nextCcCheck || 0)) return;
     const epoch = this.epoch, videoId = this.videoId, abort = this.ccRequest = new AbortController();
+    const before = Date.now(), frame = this.screenFrame();
     try {
-      const data = await request('/v1/youtube/native-cc-state', { videoId, frame: this.screenFrame() }, abort.signal);
+      const data = await request('/v1/youtube/native-cc-state', { videoId, frame }, abort.signal);
       if (this.disposed || epoch !== this.epoch || abort.signal.aborted || data.videoId !== videoId) return;
+      const currentFrame = this.screenFrame();
+      if (Date.now() - before > 1200 || ['x', 'y', 'width', 'height'].some(key => Math.abs(frame[key] - currentFrame[key]) > 4)) { this.closeNativeGate(); return; }
       this.ccState = data.state === 'off' ? 'off' : data.state === 'on' ? 'on' : 'unknown';
       this.nextCcCheck = Date.now() + 700;
       if (this.ccState !== 'off') {
         this.clearPair();
-        if (this.ccState === 'on') { this.clock?.unloadCaptions(); this.notice('原生 CC 尚未确认关闭，双语字幕保持隐藏。'); }
+        if (this.ccState === 'on') {
+          this.nativeWasOn ??= true; this.nativeChanged = true;
+          this.clock?.unloadCaptions(); this.notice('原生 CC 尚未确认关闭，双语字幕保持隐藏。');
+        }
         return;
       }
+      this.nativeWasOn ??= false; this.ccVerifiedAt = before;
       this.noticeBox.hidden = true; this.lastError = ''; this.updatePair();
     } catch (error) {
       if (error.name !== 'AbortError' && epoch === this.epoch) { this.ccState = 'unknown'; this.clearPair(); this.lastError = error.message; this.notice(error.message); this.nextCcCheck = Date.now() + 2000; }
     } finally { if (this.ccRequest === abort) this.ccRequest = null; }
   }
   updatePair() {
-    if (!this.enabled || this.loading || this.ccState !== 'off' || this.disposed || !this.clock?.isSynchronized()) { this.clearPair(); return; }
+    if (!this.enabled || this.loading || this.ccState !== 'off' || Date.now() - this.ccVerifiedAt > 1500 || this.disposed || !this.clock?.isSynchronized()) { this.clearPair(); return; }
     const sourceCues = this.tracks.get(this.info?.sourceLanguage), targetCues = this.tracks.get(config.target);
     const source = sourceCues?.[activeCueIndex(sourceCues, this.time)], target = targetCues?.[activeCueIndex(targetCues, this.time)];
     if (!source || !target) { this.clearPair(); return; }
     this.pair = { source: singleLine(source.text), target: singleLine(target.text) }; this.drawPair();
   }
   drawPair() {
-    if (!this.enabled || this.ccState !== 'off' || !this.pair || this.disposed) { this.box.hidden = true; return; }
+    if (!this.enabled || this.ccState !== 'off' || Date.now() - this.ccVerifiedAt > 1500 || !this.pair || this.disposed) { this.box.hidden = true; return; }
     const rect = this.iframe.getBoundingClientRect(), pair = this.pair;
     if (rect.width < 160 || rect.height < 90 || !pair.source || !pair.target) { this.box.hidden = true; return; }
     if (this.source.textContent !== pair.source) this.source.textContent = pair.source;

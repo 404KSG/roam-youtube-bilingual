@@ -95,5 +95,5 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('PORT 必须在 1024–65535 之间。');
   const server = makeServer({ port });
   server.on('error', (error) => { console.error(error.code === 'EADDRINUSE' ? `端口 ${port} 已被占用。` : '字幕服务启动失败。'); process.exitCode = 1; });
-  server.listen(port, '127.0.0.1', () => console.log(`Roam 双语字幕 ${VERSION}\nhttp://127.0.0.1:${port}\n仅使用 YouTube 自带翻译，不需要 API。\n本机只读桥仅提取当前 Roam YouTube 字幕；不截图、不保存 AX 树，不申请权限。\n按 Ctrl+C 停止。`));
+  server.listen(port, '127.0.0.1', () => console.log(`Roam 双语字幕 ${VERSION}\nhttp://127.0.0.1:${port}\n仅使用 YouTube 自带翻译，不需要 API。\n本机只读桥仅确认当前 Roam YouTube 的 CC 开关；不提取字幕、不截图、不保存 AX 树，不申请权限。\n按 Ctrl+C 停止。`));
 }
