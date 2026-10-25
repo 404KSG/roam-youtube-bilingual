@@ -15,7 +15,7 @@ export function createRequestPool({ now = Date.now, cooldownMs = 60000, maxEntri
   };
   const rateError = () => {
     const retryAfterSeconds = Math.max(1, Math.ceil((blockedUntil - now()) / 1000));
-    return Object.assign(new Error(`YouTube 限流（429）。本机暂停新字幕请求 ${retryAfterSeconds} 秒；之后可手动重试，不保证届时限流已解除。`), {
+    return Object.assign(new Error(`YouTube returned HTTP 429. New downloads are paused for ${retryAfterSeconds}s after this error. Retry later; YouTube may still be limiting requests.`), {
       status: 429, code: 'YOUTUBE_RATE_LIMITED', retryAfterSeconds,
     });
   };
@@ -39,7 +39,7 @@ export function createRequestPool({ now = Date.now, cooldownMs = 60000, maxEntri
         job.controller.signal.throwIfAborted();
         return job.load(job.controller.signal);
       }).then(value => finish(job, null, value), error => {
-        if (!error || typeof error !== 'object') error = new Error('字幕请求失败。');
+        if (!error || typeof error !== 'object') error = new Error('The subtitle request failed.');
         if (error.code === 'YOUTUBE_RATE_LIMITED' && error.status === 429) {
           blockedUntil = Math.max(blockedUntil, now() + cooldownMs);
           error = rateError();
@@ -55,7 +55,7 @@ export function createRequestPool({ now = Date.now, cooldownMs = 60000, maxEntri
     let job = jobs.get(key);
     if (!job) {
       if (now() < blockedUntil) return Promise.reject(rateError());
-      if (jobs.size >= maxPending) return Promise.reject(Object.assign(new Error('本机字幕请求队列已满，请稍后重试。'), { status: 503, code: 'LOCAL_QUEUE_FULL' }));
+      if (jobs.size >= maxPending) return Promise.reject(Object.assign(new Error('The local subtitle queue is full. Try again later.'), { status: 503, code: 'LOCAL_QUEUE_FULL' }));
       job = { key, load, controller: new AbortController(), waiters: new Set(), started: false, done: false };
       jobs.set(key, job); queue.push(job);
     }

@@ -14,7 +14,7 @@ test('simultaneous source cues are retained instead of silently discarding one s
   assert.equal(cues[0].text, 'Speaker A\nSpeaker B');
 });
 test('invalid time fields and malformed JSON3 entries fail safely', () => {
-  assert.throws(() => parseSubtitles('WEBVTT\n\n00:67.000 --> 01:10.000\nBad'), /时间轴/);
+  assert.throws(() => parseSubtitles('WEBVTT\n\n00:67.000 --> 01:10.000\nBad'), /timed captions/);
   assert.deepEqual(parseJSON3({ events: [null, {}, { tStartMs: 0, dDurationMs: 1000, segs: [null, { utf8: 'Valid' }] }] }), [{ id: 0, start: 0, end: 1, text: 'Valid' }]);
 });
 

@@ -31,6 +31,18 @@ test('a target 429 preserves completed English without substituting it as transl
   assert.equal(result.error.code, 'YOUTUBE_RATE_LIMITED');
 });
 
+test('auto-translated captions wait inside the extractor before download', async () => {
+  const result = await fetchCaptionTracks(id, ['zh-Hans'], undefined, { waitSeconds: 60, exec: async (_file, args, options) => {
+    assert.equal(args[args.indexOf('--sleep-subtitles') + 1], '60');
+    assert.ok(options.timeout > 120000, 'the process deadline must include preparation time');
+    assert.equal(args[args.indexOf('--retries') + 1], '0');
+    const folder = dirname(args[args.indexOf('--output') + 1]);
+    await writeFile(join(folder, `${id}.zh-Hans.json3`), json3('真实下载路径测试'));
+    return {};
+  } });
+  assert.equal(result.error, undefined); assert.ok(result.tracks['zh-Hans']);
+});
+
 test('an aborted batch returns no partial result and removes its temporary files', async () => {
   const controller = new AbortController(); let folder;
   await assert.rejects(fetchCaptionTracks(id, ['en'], controller.signal, { exec: async (_file, args) => {

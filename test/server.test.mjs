@@ -13,7 +13,7 @@ const post = (body, origin = 'https://roamresearch.com') => ({ method: 'POST', h
 const frame = { x: 100, y: 100, width: 800, height: 450 };
 test('health describes compact bridge without models, tokens or API configuration', async (t) => {
   const base = await fixture(t); const data = await (await fetch(base + '/v1/youtube/health')).json();
-  assert.equal(data.provider, 'youtube-unified'); assert.equal(data.apiVersion, 3);
+  assert.equal(data.provider, 'youtube-unified'); assert.equal(data.apiVersion, 4);
   assert.equal('apiConfigured' in data, false); assert.equal('token' in data, false);
 });
 test('captions require a video-supported target and cache actual tracks by video and language', async (t) => {
@@ -40,6 +40,23 @@ test('target-first loading batches both tracks and the source request hits cache
   const source = await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'en' }));
   assert.equal(target.status, 200); assert.equal(source.status, 200);
   assert.deepEqual(batches, [['en', 'zh-Hans']]);
+});
+test('original captions stay fast and auto-translations use the proven preparation delay', async (t) => {
+  const batches = [];
+  const base = await fixture(t, { captionFetcher: undefined, infoFetcher: async () => ({ ...info, languages: [{ code: 'zh-Hans', autoTranslated: true }] }), captionBatchFetcher: async (_id, languages, _signal, options) => {
+    batches.push({ languages, waitSeconds: options.waitSeconds });
+    return { tracks: Object.fromEntries(languages.map(language => [language, [{ id: 0, start: 0, end: 2, text: language }]])) };
+  } });
+  assert.equal((await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'zh-Hans' }))).status, 200);
+  assert.deepEqual(batches, [{ languages: ['en'], waitSeconds: 0 }, { languages: ['zh-Hans'], waitSeconds: 60 }]);
+});
+test('saved tracks load without another subtitle download', async (t) => {
+  let downloads = 0;
+  const base = await fixture(t, { captionFetcher: undefined, captionBatchFetcher: async () => { downloads++; throw new Error('unexpected download'); }, captionCache: {
+    get: async (_id, language) => [{ id: 0, start: 0, end: 2, text: language }],
+  } });
+  const response = await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'zh-Hans' }));
+  assert.equal(response.status, 200); assert.equal(downloads, 0);
 });
 test('a partial successful source is cached even when the target batch hits 429', async (t) => {
   let calls = 0;

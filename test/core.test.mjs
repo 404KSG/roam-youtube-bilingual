@@ -29,8 +29,8 @@ test('overlaps are clipped, invalid cues ignored and duplicate rolling text merg
   assert.equal(activeCueIndex(cues, 6), -1);
 });
 test('invalid or oversized imports fail with actionable errors', () => {
-  assert.throws(() => parseSubtitles('no timestamps'), /时间轴/);
+  assert.throws(() => parseSubtitles('no timestamps'), /timed captions/);
   assert.throws(() => parseSubtitles('x'.repeat(5 * 1024 * 1024 + 1)), /5 MB/);
-  assert.throws(() => parseSubtitles('{"events":[]}'), /时间轴/);
+  assert.throws(() => parseSubtitles('{"events":[]}'), /timestamps/);
   assert.equal(decodeText('&#x1f600; &#1114112; &lt;hello&gt;'), '😀 <hello>');
 });

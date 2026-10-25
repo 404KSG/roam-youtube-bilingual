@@ -25,7 +25,7 @@ export async function runUnifiedAcceptance(options = {}) {
     const path = new URL(url).pathname; const body = options.body ? JSON.parse(options.body) : {};
     calls.push({ path, body });
     let data;
-    if (path.endsWith('/health')) data = { ok: true, service: 'roam-youtube-bilingual', apiVersion: 3, provider: 'youtube-unified' };
+    if (path.endsWith('/health')) data = { ok: true, service: 'roam-youtube-bilingual', apiVersion: 4, provider: 'youtube-unified' };
     else if (path.endsWith('/video-info')) data = { videoId: body.videoId, title: 'Fixture video', sourceLanguage: 'en', languages: [{ code: 'en', name: 'English' }, { code: 'zh-Hans', name: 'Chinese' }, { code: 'ja', name: 'Japanese' }, { code: 'fr', name: 'French' }] };
     else if (path.endsWith('/captions')) data = { videoId: body.videoId, language: body.target, cues: [{ id: 0, start: 0, end: 100, text: body.target === 'en' ? source : (targets[body.target] || targets['zh-Hans']).join('') }] };
     else if (path.endsWith('/native-cc-state')) {
@@ -37,7 +37,7 @@ export async function runUnifiedAcceptance(options = {}) {
   const host = () => document.querySelector('.ryb-surface-host');
   const root = () => host().shadowRoot;
   const setting = () => document.querySelector('.ryb-settings-host')?.shadowRoot;
-  const done = () => [...setting().querySelectorAll('button')].find((node) => node.textContent === '完成').click();
+  const done = () => [...setting().querySelectorAll('button')].find((node) => node.textContent === 'Done').click();
   const clock = (time) => window.dispatchEvent(new MessageEvent('message', { source: frame.contentWindow, origin: 'https://www.youtube.com', data: { event: 'infoDelivery', info: { currentTime: time, playerState: 2 } } }));
   let held = false;
   const cleanup = () => {
@@ -49,7 +49,7 @@ export async function runUnifiedAcceptance(options = {}) {
     plugin.onload();
     const toolbar = document.querySelector('.rm-video-player__theater-toolbar');
     const icon = document.querySelector('.ryb-toolbar-button');
-    assert(icon.parentElement === toolbar && icon.textContent === 'A文', 'one icon is mounted in the existing native toolbar');
+    assert(icon.parentElement === toolbar && !!icon.querySelector('.bp3-icon.bp3-icon-translate') && !icon.querySelector('svg'), 'one icon is mounted in the existing native toolbar');
     assert(!root().querySelector('button') && !document.querySelector('.ryb-panel'), 'no in-video control cluster or below-video panel');
     const after = frame.getBoundingClientRect();
     assert(['x', 'y', 'width', 'height'].every((key) => Math.abs(before[key] - after[key]) < 1), 'native video geometry is unchanged');
@@ -58,6 +58,7 @@ export async function runUnifiedAcceptance(options = {}) {
     await wait(() => setting()?.querySelector('select').disabled === false);
     const fields = [...setting().querySelectorAll('input,select')];
     assert(fields.length === 3 && fields.some((field) => field.type === 'checkbox') && fields.some((field) => field.name === 'target') && fields.some((field) => field.name === 'fontSize'), 'settings contain only enable, language and font size');
+    assert(setting().querySelector('h2').textContent === 'Bilingual subtitles' && !/[\u4e00-\u9fff]/.test(setting().querySelector('dialog').textContent), 'all settings labels and language names are English');
     assert([...setting().querySelector('select').options].map((option) => option.value).includes('ja'), 'language choices come from video metadata');
     setting().querySelector('input[type=checkbox]').checked = true;
     setting().querySelector('input[type=checkbox]').dispatchEvent(new Event('change'));

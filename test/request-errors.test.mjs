@@ -8,7 +8,7 @@ const makeRequest = fetch => vm.runInNewContext(`${code}; request`, { fetch, SER
 
 test('a deadline is reported as timeout, not a disconnected helper', async () => {
   const request = makeRequest(async () => { throw new DOMException('expired', 'TimeoutError'); });
-  await assert.rejects(request('/v1/youtube/captions', {}), error => error.code === 'REQUEST_TIMEOUT' && !error.message.includes('未连接'));
+  await assert.rejects(request('/v1/youtube/captions', {}), error => error.code === 'REQUEST_TIMEOUT' && !error.message.includes('unavailable'));
 });
 test('upstream rate-limit code and local cooldown survive the client transport', async () => {
   let calls = 0;

@@ -11,15 +11,15 @@ if ! command -v node >/dev/null 2>&1; then
   fi
 fi
 if ! command -v node >/dev/null 2>&1; then
-  echo '需要 Node.js 22.10+。请先准备 Node.js，再运行此文件。'
-  read -r -p '按回车关闭。' unused_input
+  echo 'Node.js 22.10 or newer is required.'
+  read -r -p 'Press Return to close.' unused_input
   exit 1
 fi
 if ! command -v cua-driver >/dev/null 2>&1; then
-  echo '需要已安装并已授权的 CuaDriver 只读桥；此脚本不会自动安装或申请权限。'
-  read -r -p '按回车关闭。' unused_input
+  echo 'An existing CuaDriver installation with Accessibility access is required. No software or permissions will be changed automatically.'
+  read -r -p 'Press Return to close.' unused_input
   exit 1
 fi
-echo 'YouTube 自带翻译，英文与译文同框两行；不需要 API。'
-echo '请使用视频下方工具栏的双语图标。只读桥不会截图、保存笔记或修改权限。'
+echo 'Bilingual YouTube subtitles. No AI API credentials required.'
+echo 'Use the subtitle icon below the video. The read-only helper does not capture screenshots, save notes, or change permissions.'
 npm start

@@ -34,6 +34,14 @@ test('video metadata uses the supplied language list and removes raw URLs', () =
   assert.equal(JSON.stringify(info).includes('secret'), false);
   assert.throws(() => sanitizeVideoInfo({ id: 'other', title: 'Bad' }, 'vif8NQcjVf0'));
 });
+test('metadata distinguishes prepared auto-translations from uploaded captions', () => {
+  const metadata = sanitizeVideoInfo({ id: 'vif8NQcjVf0', title: 'Video',
+    subtitles: { en: [{ url: 'https://www.youtube.com/api/timedtext?lang=en' }], ja: [{ name: 'Japanese', url: 'https://www.youtube.com/api/timedtext?lang=ja' }] },
+    automatic_captions: { 'zh-Hans': [{ name: 'Chinese', url: 'https://www.youtube.com/api/timedtext?lang=en&tlang=zh-Hans' }], ja: [{ url: 'https://www.youtube.com/api/timedtext?lang=en&tlang=ja' }] },
+  }, 'vif8NQcjVf0');
+  assert.equal(metadata.languages.find(item => item.code === 'zh-Hans').autoTranslated, true);
+  assert.equal(metadata.languages.find(item => item.code === 'ja').autoTranslated, false);
+});
 test('peer check authenticates the client UID, not the server side of a socket', async () => {
   let calls = 0; const socket = { remoteAddress: '127.0.0.1', remotePort: 50001 };
   const verify = createPeerVerifier({ platform: 'darwin', uid: 501, exec: async (path) => { calls++; return { stdout: path.endsWith('lsof') ? 'p10\nu501\nn127.0.0.1:50001->127.0.0.1:17321\n' : '/Applications/Roam Research.app/Contents/Frameworks/Roam Research Helper' }; } });
@@ -62,6 +70,6 @@ test('read bridge uses only permitted read-only tools and returns only CC state'
 test('recording never triggers a state read or permission change', async () => {
   const calls = [];
   const reader = createCaptionReader({ platform: 'darwin', exec: async (_path, args) => { calls.push(args); return { stdout: JSON.stringify({ enabled: true }) }; } });
-  await assert.rejects(reader.read({ title: 'Test video', frame }), /录制/);
+  await assert.rejects(reader.read({ title: 'Test video', frame }), /recording/);
   assert.deepEqual(calls.map((args) => args[1]), ['get_recording_state']);
 });

@@ -61,14 +61,14 @@ export class VideoSurface {
   async toggleFullscreen() {
     if (this.fullscreen && document.fullscreenElement === this.fullscreen.container) { await document.exitFullscreen(); return; }
     const container = this.findContainer();
-    if (!container?.requestFullscreen || !document.fullscreenEnabled) throw new Error('此布局不支持双语全屏。请使用 Roam 的剧场视频视图。');
-    if (document.fullscreenElement) throw new Error('请先退出 YouTube 原生全屏，再使用“双语全屏”。');
+    if (!container?.requestFullscreen || !document.fullscreenEnabled) throw new Error('Bilingual fullscreen is unavailable in this layout. Use Roam\'s theater view.');
+    if (document.fullscreenElement) throw new Error('Exit YouTube fullscreen before opening bilingual fullscreen.');
     const original = container.getAttribute('data-ryb-fullscreen');
     const style = document.createElement('style'); style.dataset.rybFullscreen = 'true';
     style.textContent = '[data-ryb-fullscreen="managed"]:fullscreen{position:fixed!important;width:100vw!important;height:100vh!important;max-width:none!important;max-height:none!important;padding:0!important;margin:0!important;border:0!important;inset:0!important;background:#000!important}';
     this.fullscreen = { container, original, style };
     container.setAttribute('data-ryb-fullscreen', 'managed'); document.head.append(style);
-    try { await container.requestFullscreen(); } catch { this.restoreFullscreen(); throw new Error('浏览器未允许全屏，请直接点击“双语全屏”按钮重试。'); }
+    try { await container.requestFullscreen(); } catch { this.restoreFullscreen(); throw new Error('Fullscreen was blocked. Run the bilingual fullscreen command directly.'); }
   }
   restoreFullscreen() {
     if (!this.fullscreen) return;

@@ -9,16 +9,17 @@ const execute = promisify(execFile);
 const LANGUAGE = /^[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})*$/;
 export function captionDownloadError(error) {
   if (/HTTP[^\n]{0,30}429|Too Many Requests/i.test(String(error.stderr || error.message || ''))) {
-    return Object.assign(new Error('YouTube 限流（429），暂时无法获取所选字幕。未开启双语显示，请稍后再试；不会改用重复字幕遮罩。'), { status: 429, code: 'YOUTUBE_RATE_LIMITED' });
+    return Object.assign(new Error('YouTube returned HTTP 429. The requested captions are unavailable; bilingual subtitles remain off.'), { status: 429, code: 'YOUTUBE_RATE_LIMITED' });
   }
-  return Object.assign(new Error('YouTube 字幕获取失败，双语显示未开启；不会改用重复字幕遮罩。'), { code: 'YOUTUBE_DOWNLOAD_FAILED' });
+  return Object.assign(new Error('YouTube caption download failed. Bilingual subtitles remain off.'), { code: 'YOUTUBE_DOWNLOAD_FAILED' });
 }
 
 // One metadata extraction for up to two missing tracks. Preserve a successfully
 // downloaded track if the other fails; never substitute it for the missing one.
-export async function fetchCaptionTracks(videoId, languages, signal, { exec = execute } = {}) {
-  if (!/^[\w-]{11}$/.test(videoId || '')) throw new Error('无效的 YouTube 视频 ID。');
-  if (!Array.isArray(languages) || !languages.length || languages.length > 2 || languages.some(language => !LANGUAGE.test(language))) throw new Error('字幕语言无效。');
+export async function fetchCaptionTracks(videoId, languages, signal, { exec = execute, waitSeconds = 0 } = {}) {
+  if (!/^[\w-]{11}$/.test(videoId || '')) throw new Error('Invalid YouTube video ID.');
+  if (!Array.isArray(languages) || !languages.length || languages.length > 2 || languages.some(language => !LANGUAGE.test(language))) throw new Error('Invalid subtitle language.');
+  if (!Number.isFinite(waitSeconds) || waitSeconds < 0 || waitSeconds > 60) throw new Error('Invalid caption preparation delay.');
   languages = [...new Set(languages)];
   const folder = await mkdtemp(join(tmpdir(), 'roam-bilingual-'));
   try {
@@ -28,11 +29,12 @@ export async function fetchCaptionTracks(videoId, languages, signal, { exec = ex
         '--ignore-config', '--no-playlist', '--skip-download', '--no-warnings',
         '--write-subs', '--write-auto-subs', '--sub-langs', `^(?:${languages.join('|')})$`,
         '--sub-format', 'json3', '--socket-timeout', '15', '--retries', '0',
+        ...(waitSeconds ? ['--sleep-subtitles', String(waitSeconds)] : []),
         '--output', join(folder, '%(id)s.%(ext)s'), '--', `https://www.youtube.com/watch?v=${videoId}`,
-      ], { timeout: 75000, maxBuffer: 1024 * 1024, signal, windowsHide: true });
+      ], { timeout: 75000 + waitSeconds * 1000 * languages.length, maxBuffer: 1024 * 1024, signal, windowsHide: true });
     } catch (error) {
       if (error.name === 'AbortError' || signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-      if (error.code === 'ENOENT') throw new Error('未找到已安装的 yt-dlp，请检查 YT_DLP_PATH。');
+      if (error.code === 'ENOENT') throw new Error('yt-dlp was not found. Check YT_DLP_PATH.');
       failure = captionDownloadError(error);
     }
     signal?.throwIfAborted();
@@ -41,14 +43,14 @@ export async function fetchCaptionTracks(videoId, languages, signal, { exec = ex
       const file = files.find(name => name === `${videoId}.${language}.json3`);
       if (!file) continue;
       const path = join(folder, file);
-      if ((await stat(path)).size > MAX_SUBTITLE_BYTES) { failure ||= new Error('字幕超过 5 MB，已停止加载。'); continue; }
+      if ((await stat(path)).size > MAX_SUBTITLE_BYTES) { failure ||= new Error('Captions exceed the 5 MB limit. Loading stopped.'); continue; }
       try {
         const cues = parseSubtitles(await readFile(path, 'utf8'));
         if (cues.length) tracks[language] = cues;
-      } catch { failure ||= new Error('所选字幕没有有效时间轴。'); }
+      } catch { failure ||= new Error('The selected captions have no valid timestamps.'); }
     }
     signal?.throwIfAborted();
-    if (languages.some(language => !tracks[language])) failure ||= new Error('YouTube 暂未提供完整的所选字幕轨道。');
+    if (languages.some(language => !tracks[language])) failure ||= new Error('YouTube did not provide all requested caption tracks.');
     return { tracks, ...(failure ? { error: failure } : {}) };
   } finally { await rm(folder, { recursive: true, force: true }); }
 }

@@ -48,7 +48,7 @@ export function nativeCcState(snapshot, { title, frame }) {
 export function createPeerVerifier({ exec = execute, uid = process.getuid?.(), platform = process.platform } = {}) {
   const peers = new WeakMap();
   return async (socket, port) => {
-    if (platform !== 'darwin' || uid === undefined) throw new Error('原生字幕状态目前仅支持 macOS Roam 桌面版。');
+    if (platform !== 'darwin' || uid === undefined) throw new Error('Native caption checks require the macOS Roam desktop app.');
     if (!peers.has(socket)) peers.set(socket, (async () => {
       const peerPort = socket.remotePort;
       if (!Number.isInteger(peerPort) || !['127.0.0.1', '::ffff:127.0.0.1'].includes(socket.remoteAddress)) return false;
@@ -63,7 +63,7 @@ export function createPeerVerifier({ exec = execute, uid = process.getuid?.(), p
       const processInfo = await exec('/bin/ps', ['-ww', '-p', String(clientPid), '-o', 'comm='], { timeout: 1000, maxBuffer: 8192, env: localEnv() });
       return processInfo.stdout.trim().includes('/Roam Research.app/Contents/');
     })().catch(() => false));
-    if (!await peers.get(socket)) throw Object.assign(new Error('原生字幕状态仅允许当前登录用户的 Roam 桌面进程连接。'), { status: 403 });
+    if (!await peers.get(socket)) throw Object.assign(new Error('Native caption checks accept only the current user\'s Roam desktop process.'), { status: 403 });
   };
 }
 
@@ -75,19 +75,19 @@ export function createCaptionReader({ exec = execute, platform = process.platfor
   };
   return {
     async read({ title, frame, signal }) {
-      if (platform !== 'darwin') throw new Error('原生字幕状态目前需要 macOS Roam 桌面版的本机只读桥。');
+      if (platform !== 'darwin') throw new Error('Native caption checks require the local read-only helper and macOS Roam desktop.');
       if (busy) return { state: 'unknown', reason: 'busy' };
       busy = true;
       try {
         const recording = await cli('get_recording_state', {}, signal);
-        if (recording.enabled || recording.recording || recording.video_active) throw new Error('辅助工具正在录制，已暂停读取原生字幕状态。');
+        if (recording.enabled || recording.recording || recording.video_active) throw new Error('The accessibility helper is recording. Native caption checks are paused.');
         if (!discovery || now() - discoveredAt > 5000) {
           const { stdout } = await exec(process.env.CUA_DRIVER_PATH || 'cua-driver', ['permissions', 'status', '--json'], { timeout: 2000, maxBuffer: 65536, signal, env: localEnv() });
           const permissions = JSON.parse(stdout);
-          if (permissions.accessibility !== true || permissions.source?.attribution !== 'driver-daemon') throw new Error('本机状态读取组件尚未就绪；不会自动申请或更改系统权限。');
+          if (permissions.accessibility !== true || permissions.source?.attribution !== 'driver-daemon') throw new Error('The accessibility helper is not ready. Permissions will not be changed automatically.');
           const apps = await cli('list_apps', {}, signal);
           const app = apps.apps?.find((item) => item.bundle_id === ROAM_BUNDLE && item.running && Number.isInteger(item.pid) && item.pid > 0);
-          if (!app) throw new Error('请在 Roam Research 桌面版中打开视频。');
+          if (!app) throw new Error('Open the video in the Roam Research desktop app.');
           const windows = await cli('list_windows', { pid: app.pid }, signal);
           discovery = { pid: app.pid, windows: windows.windows.filter((window) => window.is_on_screen && window.bounds.width > 200 && window.bounds.height > 150).map(({ window_id, bounds, z_index }) => ({ window_id, bounds, z_index })) };
           discoveredAt = now();
@@ -102,8 +102,8 @@ export function createCaptionReader({ exec = execute, platform = process.platfor
       } catch (error) {
         if (error.name === 'AbortError') throw error;
         discovery = null;
-        const safe = ['原生字幕状态', '辅助工具正在录制', '本机状态读取组件', '请在 Roam Research'];
-        throw new Error(safe.some((prefix) => error.message?.startsWith(prefix)) ? error.message : '暂时无法确认原生字幕状态，请保持 Roam 桌面窗口可见，并确认本机只读桥已就绪。');
+        const safe = ['Native caption checks', 'The accessibility helper', 'Open the video in'];
+        throw new Error(safe.some((prefix) => error.message?.startsWith(prefix)) ? error.message : 'Native caption state is unavailable. Keep the Roam desktop window visible and check the local read-only helper.');
       } finally { busy = false; }
     },
   };

@@ -23,7 +23,7 @@ export function decodeText(value) {
 }
 
 export function normalizeCues(raw) {
-  if (!Array.isArray(raw) || raw.length > 20000) throw new Error('字幕格式无效或超过 20000 条，请分段导入。');
+  if (!Array.isArray(raw) || raw.length > 20000) throw new Error('Invalid captions or more than 20,000 cues.');
   // Normalized cues are plain text. Decoding them twice would erase literal <T>.
   const clean = raw.filter((cue) => cue && typeof cue.text === 'string')
     .map((cue) => ({ start: Number(cue.start), end: Number(cue.end), text: cue.text.replace(/[\t ]+/g, ' ').trim() }))
@@ -44,7 +44,7 @@ export function normalizeCues(raw) {
 
 export function parseJSON3(data) {
   const json = typeof data === 'string' ? JSON.parse(data) : data;
-  if (!Array.isArray(json?.events)) throw new Error('不是有效的 YouTube JSON3 字幕。');
+  if (!Array.isArray(json?.events)) throw new Error('Invalid YouTube JSON3 captions.');
   const raw = [];
   for (const event of json.events) {
     if (!Array.isArray(event?.segs)) continue;
@@ -68,11 +68,11 @@ function timestamp(value) {
 }
 
 export function parseSubtitles(input) {
-  if (typeof input !== 'string' || new TextEncoder().encode(input).length > MAX_SUBTITLE_BYTES) throw new Error('字幕文件须小于 5 MB。');
+  if (typeof input !== 'string' || new TextEncoder().encode(input).length > MAX_SUBTITLE_BYTES) throw new Error('Caption files must be smaller than 5 MB.');
   const text = input.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').trim();
   if (text.startsWith('{')) {
     const cues = parseJSON3(text);
-    if (!cues.length) throw new Error('字幕文件中没有有效时间轴。');
+    if (!cues.length) throw new Error('The caption file has no valid timestamps.');
     return cues;
   }
   const raw = [];
@@ -85,7 +85,7 @@ export function parseSubtitles(input) {
     raw.push({ start: timestamp(match[1]), end: timestamp(match[2]), text: decodeText(lines.slice(position + 1).join('\n')) });
   }
   const cues = normalizeCues(raw);
-  if (!cues.length) throw new Error('没有读到时间轴，请选择 SRT、VTT 或 YouTube JSON3 文件。');
+  if (!cues.length) throw new Error('No timed captions found. Expected SRT, VTT, or YouTube JSON3.');
   return cues;
 }
 

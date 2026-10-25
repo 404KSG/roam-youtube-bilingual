@@ -5,8 +5,8 @@ import { claimRenderer, releaseRenderer } from './lifecycle.mjs';
 import { VERSION, SERVICE_URL, DEFAULT_CONFIG, validateConfig, verifyHealth, singleLine, fittedFontSize } from './protocol.mjs';
 
 const STORAGE_KEY = 'roam-youtube-bilingual/session/v1';
-const commandLabel = 'YouTube 双语字幕：设置';
-const fullscreenCommand = 'YouTube 双语字幕：双语全屏';
+const commandLabel = 'YouTube subtitles: Settings';
+const fullscreenCommand = 'YouTube subtitles: Fullscreen';
 const videos = new Map();
 let config = { ...DEFAULT_CONFIG };
 let active = false, observer, scanTimer, surfaceTimer, settings, globalStyle;
@@ -29,23 +29,23 @@ async function request(path, body, signal) {
       method: body ? 'POST' : 'GET', credentials: 'omit',
       headers: body ? { 'Content-Type': 'application/json' } : {},
       ...(body ? { body: JSON.stringify(body) } : {}),
-      signal: AbortSignal.any([signal || new AbortController().signal, AbortSignal.timeout(path.endsWith('native-cc-state') ? 3500 : 90000)]),
+      signal: AbortSignal.any([signal || new AbortController().signal, AbortSignal.timeout(path.endsWith('native-cc-state') ? 3500 : path.endsWith('/captions') ? 240000 : 90000)]),
     });
   } catch (error) {
     if (signal?.aborted || error.name === 'AbortError') throw new DOMException('Aborted', 'AbortError');
-    if (error.name === 'TimeoutError') throw Object.assign(new Error('字幕请求超时，请稍后手动重试。'), { code: 'REQUEST_TIMEOUT' });
-    throw Object.assign(new Error('本机字幕服务未连接，请运行新版 start.command。'), { code: 'SERVICE_UNREACHABLE' });
+    if (error.name === 'TimeoutError') throw Object.assign(new Error('The subtitle request timed out. Try again later.'), { code: 'REQUEST_TIMEOUT' });
+    throw Object.assign(new Error('The local subtitle helper is unavailable. Run start.command.'), { code: 'SERVICE_UNREACHABLE' });
   }
   let data;
-  try { data = await response.json(); } catch { throw new Error('本机字幕服务响应无效。'); }
-  if (!response.ok) throw Object.assign(new Error(data?.error || `字幕服务返回 HTTP ${response.status}`), {
+  try { data = await response.json(); } catch { throw new Error('The local subtitle helper returned an invalid response.'); }
+  if (!response.ok) throw Object.assign(new Error(data?.error || `The subtitle helper returned HTTP ${response.status}.`), {
     status: response.status, code: typeof data?.code === 'string' ? data.code : 'HTTP_ERROR',
     ...(Number.isFinite(data?.retryAfterSeconds) ? { retryAfterSeconds: Math.max(1, Math.min(3600, data.retryAfterSeconds)) } : {}),
   });
   return data;
 }
 function languageName(language) {
-  try { return new Intl.DisplayNames(['zh-CN'], { type: 'language' }).of(language.code) || language.name; } catch { return language.name; }
+  try { return new Intl.DisplayNames(['en'], { type: 'language' }).of(language.code) || language.code; } catch { return language.code; }
 }
 function closeSettings(ref = settings) {
   if (!ref || ref.closed) return;
@@ -64,21 +64,21 @@ function openSettings(owner) {
   const ref = { host, dialog, owner, abort: new AbortController() }; settings = ref;
   for (const type of ['pointerdown', 'click', 'keydown']) dialog.addEventListener(type, (event) => event.stopPropagation());
   dialog.addEventListener('close', () => closeSettings(ref));
-  dialog.append(el('h2', '', '双语字幕'));
+  dialog.append(el('h2', '', 'Bilingual subtitles'));
   const enabledLabel = el('label', 'ryb-toggle-row');
-  const enabled = el('input'); enabled.type = 'checkbox'; enabled.checked = owner.enabled; enabled.setAttribute('aria-label', '开启双语字幕');
-  enabledLabel.append(el('span', '', '开启双语字幕'), enabled); dialog.append(enabledLabel);
-  const languageLabel = el('label', 'ryb-field'); languageLabel.append(el('span', '', '英文 → 译文语言'));
+  const enabled = el('input'); enabled.type = 'checkbox'; enabled.checked = owner.enabled; enabled.setAttribute('aria-label', 'Enable bilingual subtitles');
+  enabledLabel.append(el('span', '', 'Enable bilingual subtitles'), enabled); dialog.append(enabledLabel);
+  const languageLabel = el('label', 'ryb-field'); languageLabel.append(el('span', '', 'Translation language'));
   const language = el('select'); language.name = 'target'; language.disabled = true;
-  language.append(el('option', '', '读取 YouTube 支持的语言…')); languageLabel.append(language); dialog.append(languageLabel);
+  language.append(el('option', '', 'Loading available languages…')); languageLabel.append(language); dialog.append(languageLabel);
   const fontLabel = el('label', 'ryb-field');
-  const sizeText = el('span', '', `字号 ${config.fontSize} px`);
-  const font = el('input'); font.type = 'range'; font.name = 'fontSize'; font.min = '12'; font.max = '36'; font.step = '1'; font.value = String(config.fontSize); font.setAttribute('aria-label', '双语字号');
+  const sizeText = el('span', '', `Font size: ${config.fontSize} px`);
+  const font = el('input'); font.type = 'range'; font.name = 'fontSize'; font.min = '12'; font.max = '36'; font.step = '1'; font.value = String(config.fontSize); font.setAttribute('aria-label', 'Subtitle font size');
   fontLabel.append(sizeText, font); dialog.append(fontLabel);
-  dialog.append(el('p', 'ryb-hint', '始终两行、共用背景；仅在原生 CC 已确认关闭后显示。'));
-  const status = el('p', 'ryb-status'); status.setAttribute('role', 'status'); dialog.append(status);
-  const footer = el('div', 'ryb-settings-footer'); footer.append(button('完成', () => closeSettings(ref), 'ryb-primary')); dialog.append(footer);
-  font.addEventListener('input', () => { try { saveConfig({ ...config, fontSize: Number(font.value) }); sizeText.textContent = `字号 ${config.fontSize} px`; } catch (error) { status.textContent = error.message; } });
+  dialog.append(el('p', 'ryb-hint', 'English above translation. Two lines share one background; long captions shrink to fit.'));
+  const status = el('p', 'ryb-status'); status.setAttribute('role', 'status'); status.textContent = owner.loading ? owner.noticeBox.textContent || 'Preparing subtitles…' : owner.lastError || ''; ref.status = status; dialog.append(status);
+  const footer = el('div', 'ryb-settings-footer'); footer.append(button('Done', () => closeSettings(ref), 'ryb-primary')); dialog.append(footer);
+  font.addEventListener('input', () => { try { saveConfig({ ...config, fontSize: Number(font.value) }); sizeText.textContent = `Font size: ${config.fontSize} px`; } catch (error) { status.textContent = error.message; } });
   language.addEventListener('change', () => { try { saveConfig({ ...config, target: language.value }); } catch (error) { status.textContent = error.message; } });
   enabled.addEventListener('change', () => { if (enabled.checked) void owner.turnOn().then(() => { if (!ref.closed) { enabled.checked = owner.enabled; status.textContent = owner.lastError || ''; } }); else owner.turnOff(); });
   shadow.append(style, dialog);
@@ -91,20 +91,19 @@ function openSettings(owner) {
     const priority = ['zh-Hans', 'zh-Hant', 'ja'];
     const languages = [...info.languages].sort((a, b) => {
       const ai = priority.includes(a.code) ? priority.indexOf(a.code) : 99, bi = priority.includes(b.code) ? priority.indexOf(b.code) : 99;
-      return ai - bi || languageName(a).localeCompare(languageName(b), 'zh-CN');
+      return ai - bi || languageName(a).localeCompare(languageName(b), 'en');
     });
     for (const item of languages) { const option = el('option', '', languageName(item)); option.value = item.code; language.append(option); }
     language.value = config.target;
-    if (!language.value) { language.selectedIndex = -1; status.textContent = '请从这个视频支持的语言中选择译文。'; }
+    if (!language.value) { language.selectedIndex = -1; status.textContent = 'Choose a translation language available for this video.'; }
     language.disabled = !languages.length;
-    if (!info.sourceLanguage) { enabled.disabled = true; status.textContent = '该视频没有可用的英文原字幕。'; }
+    if (!info.sourceLanguage) { enabled.disabled = true; status.textContent = 'This video has no available English captions.'; }
   }).catch((error) => { if (!ref.closed && error.name !== 'AbortError') status.textContent = error.message; });
 }
 function toolbarIcon() {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('width', '18'); svg.setAttribute('height', '18'); svg.setAttribute('aria-hidden', 'true');
-  svg.innerHTML = '<path d="M3 4h18v14H9l-4 3v-3H3z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><text x="5" y="14" font-size="9" font-family="Arial,sans-serif" fill="currentColor">A</text><text x="12" y="14" font-size="9" font-family="PingFang SC,sans-serif" fill="currentColor">文</text>';
-  return svg;
+  const icon = el('span', 'bp3-icon bp3-icon-translate');
+  icon.setAttribute('aria-hidden', 'true');
+  return icon;
 }
 
 class VideoCaptions {
@@ -112,13 +111,13 @@ class VideoCaptions {
     this.iframe = iframe; this.videoId = videoIdFromUrl(iframe.src); this.embedId = this.videoId;
     this.tracks = new Map(); this.time = 0; this.epoch = 0; this.enabled = false; this.loading = false; this.ccState = 'unknown'; this.ccVerifiedAt = 0; this.nativeWasOn = null; this.nativeChanged = false;
     this.surface = new VideoSurface(iframe, STYLE); this.surface.host.dataset.version = VERSION;
-    this.box = el('div', 'ryb-caption-box'); this.box.hidden = true; this.box.setAttribute('aria-label', '双语字幕');
+    this.box = el('div', 'ryb-caption-box'); this.box.hidden = true; this.box.setAttribute('aria-label', 'Bilingual subtitles');
     this.source = el('div', 'ryb-line ryb-source'); this.source.dir = 'ltr';
     this.target = el('div', 'ryb-line ryb-target'); this.target.dir = 'auto';
     this.box.append(this.source, this.target); this.surface.scene.append(this.box);
     this.noticeBox = el('div', 'ryb-notice'); this.noticeBox.hidden = true; this.noticeBox.setAttribute('role', 'status'); this.surface.scene.append(this.noticeBox);
     this.toolbarButton = button('', () => openSettings(this), 'bp3-button bp3-minimal ryb-toolbar-button');
-    this.toolbarButton.append(toolbarIcon()); this.toolbarButton.setAttribute('aria-label', '双语字幕设置'); this.toolbarButton.setAttribute('aria-haspopup', 'dialog'); this.toolbarButton.title = '双语字幕：语言与字号';
+    this.toolbarButton.append(toolbarIcon()); this.toolbarButton.setAttribute('aria-label', 'Bilingual subtitle settings'); this.toolbarButton.setAttribute('aria-haspopup', 'dialog'); this.toolbarButton.title = 'Bilingual subtitle settings';
     for (const type of ['click', 'pointerdown', 'mousedown', 'keydown']) this.toolbarButton.addEventListener(type, (event) => event.stopPropagation());
     this.canvas = document.createElement('canvas'); this.measure = this.canvas.getContext('2d');
     this.mountToolbar();
@@ -136,8 +135,16 @@ class VideoCaptions {
     if (this.toolbarButton.parentElement !== target) target.append(this.toolbarButton);
     if (native && this.fallback) { this.fallback.remove(); this.fallback = null; }
   }
-  updateIcon() { this.toolbarButton.dataset.active = String(this.enabled); this.toolbarButton.dataset.loading = String(this.loading); this.toolbarButton.setAttribute('aria-busy', String(this.loading)); }
-  notice(message, duration = 0) { if (this.disposed) return; clearTimeout(this.noticeTimer); this.noticeBox.textContent = message; this.noticeBox.hidden = !message; if (duration) this.noticeTimer = setTimeout(() => { this.noticeBox.hidden = true; }, duration); }
+  updateIcon() { this.toolbarButton.dataset.active = String(this.enabled); this.toolbarButton.dataset.loading = String(this.loading); this.toolbarButton.setAttribute('aria-busy', String(this.loading)); this.toolbarButton.title = this.loading ? 'Preparing subtitles. Open settings to cancel.' : 'Bilingual subtitle settings'; }
+  notice(message, duration = 6000) {
+    if (this.disposed) return;
+    if (settings?.owner === this && settings.status) settings.status.textContent = message;
+    const key = `${this.epoch}:${message}`;
+    if (this.lastNoticeKey === key) return;
+    this.lastNoticeKey = key;
+    clearTimeout(this.noticeTimer); this.noticeBox.textContent = message; this.noticeBox.hidden = !message;
+    if (duration) this.noticeTimer = setTimeout(() => { this.noticeBox.hidden = true; }, duration);
+  }
   cancelInfo() {
     const task = this.infoTask; this.infoTask = null; task?.abort.abort();
   }
@@ -153,7 +160,7 @@ class VideoCaptions {
       catch (error) { response = Promise.reject(error); }
       task.promise = Promise.resolve(response).then(info => {
         if (this.disposed || this.infoTask !== task || task.abort.signal.aborted || this.videoId !== videoId) throw new DOMException('Aborted', 'AbortError');
-        if (info.videoId !== videoId || !Array.isArray(info.languages)) throw new Error('当前视频信息已改变。');
+        if (info.videoId !== videoId || !Array.isArray(info.languages)) throw new Error('The video metadata no longer matches the current video.');
         this.info = info; return info;
       }).finally(() => { task.settled = true; if (this.infoTask === task) this.infoTask = null; });
     }
@@ -182,38 +189,39 @@ class VideoCaptions {
     if (this.tracks.has(language)) return this.tracks.get(language);
     const data = await request('/v1/youtube/captions', { videoId: this.videoId, target: language }, signal);
     signal?.throwIfAborted();
-    if (this.disposed || data.videoId !== this.videoId || data.language !== language) throw new Error('字幕与当前视频或语言不匹配。');
+    if (this.disposed || data.videoId !== this.videoId || data.language !== language) throw new Error('The captions do not match the current video or language.');
     const cues = normalizeCues(data.cues);
-    if (!cues.length) throw new Error('所选字幕没有有效时间轴。');
+    if (!cues.length) throw new Error('The selected captions have no valid timestamps.');
     this.tracks.set(language, cues); return cues;
   }
   connect() {
     if (this.clock) return;
     this.clock = new YouTubeClock(this.iframe, (time) => { if (!this.disposed) { this.time = time; this.updatePair(); } }, (state) => {
-      if (this.enabled && /中断/.test(state)) { this.clearPair(); this.notice(state); }
+      if (this.enabled && state === 'Playback time unavailable. Subtitles are paused.') { this.clearPair(); this.notice(state); }
     }, (id) => this.videoChanged(id), { onApiChange: () => this.closeNativeGate(), onIframeLoad: () => this.closeNativeGate() });
   }
   videoChanged(id) {
     this.cancelInfo(); this.closeNativeGate(); this.turnOff(); this.videoId = id; this.info = null; this.tracks.clear();
-    this.notice('视频已切换，请重新开启双语。', 4000);
+    this.notice('Video changed. Enable bilingual subtitles again.', 4000);
   }
   async turnOn() {
     if (this.enabled || this.disposed) return;
     for (const video of videos.values()) if (video !== this) video.turnOff();
     this.turnOff(); this.enabled = true; this.loading = true; this.lastError = '';
     const epoch = this.epoch; const abort = this.startRequest = new AbortController();
-    this.updateIcon(); this.notice('正在下载英文与译文字幕…');
+    this.updateIcon(); this.notice('Loading English and translated subtitles…');
     try {
       verifyHealth(await request('/v1/youtube/health', undefined, abort.signal));
       const info = await this.loadInfo(abort.signal);
-      if (!info.sourceLanguage) throw new Error('该视频没有可用的英文原字幕。');
-      if (!info.languages.some((item) => item.code === config.target)) throw new Error('请在设置中选择本视频支持的译文语言。');
-      // Request the target first: the helper batches missing English + target
-      // tracks in one extraction. The following source request reuses its cache.
+      if (!info.sourceLanguage) throw new Error('This video has no available English captions.');
+      if (!info.languages.some((item) => item.code === config.target)) throw new Error('Choose a translation language available for this video.');
+      if (!this.tracks.has(config.target) && info.languages.some(item => item.code === config.target && item.autoTranslated)) this.notice('Preparing YouTube translation. The first download may take about a minute.');
+      // The helper prepares auto-translations after extraction and reuses saved
+      // tracks. Original/uploaded captions do not need the preparation delay.
       await this.loadTrack(config.target, abort.signal);
       await this.loadTrack(info.sourceLanguage, abort.signal);
       if (this.disposed || epoch !== this.epoch || abort.signal.aborted) return;
-      this.connect(); this.closeNativeGate(); this.notice('正在关闭原生 CC 并确认状态…');
+      this.connect(); this.closeNativeGate(); this.notice('Checking that native captions are off…');
     } catch (error) {
       if (error.name !== 'AbortError' && epoch === this.epoch) { this.turnOff(); this.lastError = error.message; this.notice(error.message); }
     } finally { if (this.startRequest === abort) { this.startRequest = null; this.loading = false; this.updateIcon(); } }
@@ -258,12 +266,12 @@ class VideoCaptions {
         this.clearPair();
         if (this.ccState === 'on') {
           this.nativeWasOn ??= true; this.nativeChanged = true;
-          this.clock?.unloadCaptions(); this.notice('原生 CC 尚未确认关闭，双语字幕保持隐藏。');
+          this.clock?.unloadCaptions(); this.notice('Native captions are still on. Bilingual subtitles remain hidden.');
         }
         return;
       }
       this.nativeWasOn ??= false; this.ccVerifiedAt = before;
-      this.noticeBox.hidden = true; this.lastError = ''; this.updatePair();
+      this.noticeBox.hidden = true; this.lastNoticeKey = null; this.lastError = ''; this.updatePair();
     } catch (error) {
       if (error.name !== 'AbortError' && epoch === this.epoch) { this.ccState = 'unknown'; this.clearPair(); this.lastError = error.message; this.notice(error.message); this.nextCcCheck = Date.now() + 2000; }
     } finally { if (this.ccRequest === abort) this.ccRequest = null; }
@@ -309,10 +317,10 @@ function scan() {
 }
 function onload() {
   if (lifecycle.active) onunload();
-  if (!claimRenderer(window, lifecycle, { unknownRenderer: () => !!document.querySelector('.ryb-surface-host,.ryb-settings-host,.ryb-toolbar-button,[data-ryb-toolbar]') })) { console.error('Roam YouTube Bilingual 未启动：旧渲染实例无法安全卸载。'); return false; }
+  if (!claimRenderer(window, lifecycle, { unknownRenderer: () => !!document.querySelector('.ryb-surface-host,.ryb-settings-host,.ryb-toolbar-button,[data-ryb-toolbar]') })) { console.error('Roam YouTube Bilingual did not start: the previous instance could not be unloaded safely.'); return false; }
   active = true;
   try { config = validateConfig(JSON.parse(sessionStorage.getItem(STORAGE_KEY) || '{}')); } catch { config = { ...DEFAULT_CONFIG }; }
-  globalStyle = el('style'); globalStyle.dataset.rybToolbar = 'true'; globalStyle.textContent = '.ryb-toolbar-button{width:30px!important;min-width:30px!important;height:30px!important;padding:6px!important;display:inline-flex!important;align-items:center;justify-content:center;background:transparent;border:0;border-radius:3px;color:#607789;cursor:pointer}.ryb-toolbar-button:hover{background:#6077891c}.ryb-toolbar-button[data-active="true"]{color:#2378b5;background:#2378b512}.ryb-toolbar-button svg{display:block;pointer-events:none}.ryb-toolbar-fallback{display:flex;justify-content:flex-end;min-height:30px}.ryb-toolbar-button:focus-visible{outline:2px solid #2378b5;outline-offset:2px}'; document.head.append(globalStyle);
+  globalStyle = el('style'); globalStyle.dataset.rybToolbar = 'true'; globalStyle.textContent = '.ryb-toolbar-button{width:30px!important;min-width:30px!important;height:30px!important;padding:6px!important;display:inline-flex!important;align-items:center;justify-content:center;background:transparent;border:0;border-radius:3px;color:#607789;cursor:pointer}.ryb-toolbar-button:hover{background:#6077891c}.ryb-toolbar-button[data-active="true"]{color:#2378b5;background:#2378b512}.ryb-toolbar-button .bp3-icon{font-size:20px;line-height:1;color:inherit;pointer-events:none}.ryb-toolbar-fallback{display:flex;justify-content:flex-end;min-height:30px}.ryb-toolbar-button:focus-visible{outline:2px solid #2378b5;outline-offset:2px}'; document.head.append(globalStyle);
   observer = new MutationObserver((records) => {
     if (records.every((record) => record.target instanceof Element && record.target.closest('.ryb-surface-host,.ryb-settings-host,.ryb-toolbar-button'))) return;
     if (!scanTimer) scanTimer = setTimeout(() => { scanTimer = null; scan(); }, 100);

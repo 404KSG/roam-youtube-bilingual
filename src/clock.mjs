@@ -54,7 +54,7 @@ export class YouTubeClock {
         if (Number.isFinite(info.playbackRate) && info.playbackRate > 0) this.rate = info.playbackRate;
       }
       if (this.hasTime) {
-        this.setStatus('已连接播放器');
+        this.setStatus('Player connected.');
         if (this.pendingSeek !== null) { const target = this.pendingSeek; this.pendingSeek = null; this.seek(target); }
       }
       this.onTime(this.currentTime());
@@ -66,7 +66,7 @@ export class YouTubeClock {
     };
     this.loaded = () => {
       this.ready = false; this.hasTime = false; this.state = -1; this.lastTimeMessage = -Infinity;
-      this.setStatus('正在连接…'); this.onIframeLoad(); this.listen();
+      this.setStatus('Connecting to the player…'); this.onIframeLoad(); this.listen();
     };
     window.addEventListener('message', this.message);
     iframe.addEventListener('load', this.loaded);
@@ -79,10 +79,10 @@ export class YouTubeClock {
     this.handshake = setInterval(() => { if (!this.isSynchronized()) this.listen(); }, 2000);
     this.timer = setInterval(() => {
       this.readSdk();
-      if (this.hasTime && !this.isSynchronized()) this.setStatus('播放时间信号中断，已暂停字幕显示。');
+      if (this.hasTime && !this.isSynchronized()) this.setStatus('Playback time unavailable. Subtitles are paused.');
       this.onTime(this.currentTime());
     }, 200);
-    this.timeout = setTimeout(() => { if (!this.hasTime) this.setStatus('未收到播放时间。请先播放视频。'); }, 12000);
+    this.timeout = setTimeout(() => { if (!this.hasTime) this.setStatus('No playback time received. Play the video first.'); }, 12000);
   }
   readSdk() {
     // Prefer fresh player packets. The existing SDK also supplies time/state
@@ -96,7 +96,7 @@ export class YouTubeClock {
       if (time !== this.sdkTime || state !== this.sdkState) this.lastTimeMessage = this.now();
       this.sdkTime = time; this.sdkState = state;
       this.time = time; this.state = state; this.rate = rate; this.updated = this.now(); this.hasTime = true; this.ready = true;
-      this.setStatus('已连接播放器');
+      this.setStatus('Player connected.');
     } catch { /* Player may be between mounts; packet transport remains available. */ }
   }
   setStatus(value) { if (this.status !== value) { this.status = value; this.onState(value); } }
