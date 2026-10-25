@@ -22,6 +22,8 @@ export class YouTubeClock {
     // stealing infoDelivery from its timestamp/seek controls.
     let sdk;
     try { const candidate = window.YT?.get?.(iframe.id); if (candidate?.getIframe?.() === iframe) sdk = candidate; } catch { /* Standalone iframe. */ }
+    this.sdk = sdk;
+    this.lastRawTimeAt = -Infinity;
     this.channelId = sdk && ['number', 'string'].includes(typeof sdk.id) ? sdk.id : `ryb-${Math.random().toString(36).slice(2)}`;
     this.message = (event) => {
       if (this.destroyed || event.source !== iframe.contentWindow || event.origin !== this.origin) return;
@@ -45,7 +47,7 @@ export class YouTubeClock {
         // Rate/state-only packets must rebase the clock before changing its slope.
         if (Number.isFinite(info.currentTime) && info.currentTime >= 0) {
           this.time = info.currentTime; this.updated = now();
-          this.hasTime = true; this.lastTimeMessage = now();
+          this.hasTime = true; this.lastTimeMessage = now(); this.lastRawTimeAt = now();
         } else if (Number.isFinite(info.playerState) || Number.isFinite(info.playbackRate)) {
           this.time = snapshot; this.updated = now();
         }
@@ -81,11 +83,28 @@ export class YouTubeClock {
     this.listen();
     this.handshake = setInterval(() => { if (!this.isSynchronized()) this.listen(); }, 2000);
     this.timer = setInterval(() => {
+      this.readSdk();
       if (this.hasTime && !this.isSynchronized()) this.setStatus('播放时间信号中断，已暂停自动翻译；可点击重新连接。');
       this.applyNativeTranslation();
       this.onTime(this.currentTime());
     }, 200);
     this.timeout = setTimeout(() => { if (!this.hasTime) this.setStatus('未收到播放时间。请先播放视频；若仍无响应，请重新连接。'); }, 12000);
+  }
+  readSdk() {
+    // Prefer fresh player packets. The existing SDK also supplies time/state
+    // when a paused player or SDK message dispatcher does not rebroadcast them.
+    if (this.destroyed || !this.sdk || this.now() - this.lastRawTimeAt < 500) return;
+    try {
+      if (this.sdk.getIframe?.() !== this.iframe) return;
+      const time = this.sdk.getCurrentTime?.(), state = this.sdk.getPlayerState?.();
+      if (!Number.isFinite(time) || time < 0 || ![-1, 0, 1, 2, 3, 5].includes(state)) return;
+      const rate = this.sdk.getPlaybackRate?.() || 1;
+      if (time !== this.sdkTime || state !== this.sdkState) this.lastTimeMessage = this.now();
+      this.sdkTime = time; this.sdkState = state;
+      this.time = time; this.state = state; this.rate = rate; this.updated = this.now(); this.hasTime = true; this.ready = true;
+      if (state === 1 && this.nativeTrack && !this.nativePlaySeen) { this.nativePlaySeen = true; this.nativeAttempts = 0; this.nativeLastAttempt = -Infinity; }
+      this.setStatus('已连接播放器');
+    } catch { /* Player may be between mounts; packet transport remains available. */ }
   }
   setStatus(value) { if (this.status !== value) { this.status = value; this.onState(value); } }
   post(data) { if (!this.destroyed) this.iframe.contentWindow?.postMessage(JSON.stringify(data), this.origin); }
@@ -102,7 +121,7 @@ export class YouTubeClock {
     // Chinese is fetched and rendered by YouTube, never translated by our API.
     if (!this.nativeTrack || !this.hasTime || this.destroyed || this.nativeAttempts >= 3 || this.now() - this.nativeLastAttempt < 1500) return;
     this.nativeLastAttempt = this.now(); this.nativeAttempts++;
-    this.command('loadModule', ['captions']);
+    if (this.nativeAttempts === 1) this.command('loadModule', ['captions']);
     this.command('setOption', ['captions', 'track', this.nativeTrack]);
   }
   isSynchronized() {

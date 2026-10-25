@@ -82,6 +82,10 @@ export async function runUnifiedAcceptance(options = {}) {
     const nr = nativeCaption.getBoundingClientRect(), boxRect = box.getBoundingClientRect(), fr = frame.getBoundingClientRect();
     assert(boxRect.left <= fr.left + nr.left && boxRect.right >= fr.left + nr.right && boxRect.top <= fr.top + nr.top && boxRect.bottom >= fr.top + nr.bottom, 'shared box masks the original native-caption rectangle');
     if (options.capture) { held = true; window.__unifiedFixtureCleanup = cleanup; return { ...results, screenshotUsesMockData: true }; }
+    nativeCaption.style.width = '100%';
+    await wait(() => Math.abs(box.getBoundingClientRect().width - frame.getBoundingClientRect().width) < 1);
+    assert(Math.abs(box.getBoundingClientRect().left - frame.getBoundingClientRect().left) < 1 && getComputedStyle(box).borderRadius === '0px', 'edge-wide native captions have no uncovered side slivers');
+    nativeCaption.style.width = 'max-content';
     icon.click();
     await wait(() => setting()?.querySelector('select').disabled === false);
     setting().querySelector('[name=target]').value = 'ja'; setting().querySelector('[name=target]').dispatchEvent(new Event('change'));

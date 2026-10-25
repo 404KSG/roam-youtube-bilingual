@@ -8,7 +8,10 @@ test('settings contain only target language and font size; old API settings are 
   for (const fontSize of [0, 11, 37, NaN, Infinity]) assert.throws(() => validateConfig({ fontSize }));
 });
 test('YouTube aliases retain selectable native target languages', () => {
-  assert.deepEqual(nativeCaptionTrack('en', 'zh-TW'), { languageCode: 'en', translationLanguage: { languageCode: 'zh-Hant' } });
+  const track = nativeCaptionTrack('en', 'zh-TW', { targetName: 'Chinese (Traditional)' });
+  assert.equal(track.languageCode, 'en'); assert.equal(track.kind, ''); assert.equal(track.name, ''); assert.equal(track.vss_id, '.en');
+  assert.deepEqual(track.translationLanguage, { languageCode: 'zh-Hant', languageName: 'Chinese (Traditional)' });
+  assert.equal(nativeCaptionTrack('en', 'ja', { sourceTrack: { kind: 'asr', name: '' }, targetName: 'Japanese' }).vss_id, 'a.en');
   assert.equal(nativeCaptionTrack('en', 'ja').translationLanguage.languageCode, 'ja');
   assert.throws(() => nativeCaptionTrack('en', 'bad\nlang'));
 });

@@ -241,11 +241,11 @@ class VideoCaptions {
     const measured = Math.max(this.measure.measureText(pair.source).width, this.measure.measureText(pair.target).width);
     const font = fittedFontSize(config.fontSize, available, measured);
     const textWidth = measured * font / config.fontSize;
-    const width = Math.min(rect.width - 8, Math.max(textWidth + 24, pair.bounds.width * rect.width + 24));
+    const width = Math.min(rect.width, Math.max(textWidth + 24, pair.bounds.width * rect.width + 24));
     const height = Math.max(font * 2.5 + 12, pair.bounds.height * rect.height + 20);
     const bottom = Math.min(rect.height, (pair.bounds.top + pair.bounds.height) * rect.height + 10);
     const top = Math.max(0, bottom - height);
-    Object.assign(this.box.style, { width: `${width}px`, height: `${height}px`, left: `${Math.max(4, (rect.width - width) / 2)}px`, top: `${top}px`, fontSize: `${font}px` });
+    Object.assign(this.box.style, { width: `${width}px`, height: `${height}px`, left: `${Math.max(0, (rect.width - width) / 2)}px`, top: `${top}px`, fontSize: `${font}px`, borderRadius: width >= rect.width - 0.5 ? '0px' : '4px' });
     this.box.hidden = false;
     // Validate actual shaped text too (e.g. Arabic or fallback CJK fonts), not
     // just canvas estimates. Keep the complete text on one line per language.

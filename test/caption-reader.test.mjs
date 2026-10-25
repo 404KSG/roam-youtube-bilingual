@@ -42,6 +42,7 @@ test('Chinese and Japanese lines are joined, while Latin word boundaries are ret
 test('video metadata uses the supplied language list and removes raw URLs', () => {
   const info = sanitizeVideoInfo({ id: 'vif8NQcjVf0', title: 'Test video', subtitles: { en: [{ ext: 'json3', name: 'English', url: 'https://www.youtube.com/api/timedtext?lang=en' }] }, automatic_captions: { ja: [{ name: 'Japanese', url: 'https://www.youtube.com/?secret=not-returned' }], 'zh-Hans': [{ name: 'Chinese (Simplified)' }], 'en-orig': [{}], bad: [] } }, 'vif8NQcjVf0');
   assert.equal(info.sourceLanguage, 'en');
+  assert.deepEqual(info.sourceTrack, { languageCode: 'en', languageName: 'English', kind: '', name: '', vss_id: '.en' });
   assert.ok(info.languages.some((item) => item.code === 'ja'));
   assert.ok(!info.languages.some((item) => item.code.endsWith('-orig')));
   assert.equal(JSON.stringify(info).includes('secret'), false);
