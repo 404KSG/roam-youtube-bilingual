@@ -1,6 +1,6 @@
-export const VERSION = '0.5.0-beta.2';
+export const VERSION = '0.5.0-beta.3';
 export const SERVICE_ID = 'roam-youtube-bilingual';
-export const API_VERSION = 2;
+export const API_VERSION = 3;
 export const SERVICE_URL = 'http://127.0.0.1:17321';
 export const DEFAULT_CONFIG = { target: 'zh-Hans', fontSize: 20 };
 export function youtubeLanguage(code) {
@@ -13,16 +13,6 @@ export function validateConfig(value = {}) {
   const fontSize = Number(value.fontSize ?? (value.fontScale ? Math.round(Number(value.fontScale) * 20) : DEFAULT_CONFIG.fontSize));
   if (!Number.isFinite(fontSize) || fontSize < 12 || fontSize > 36) throw new Error('字号须在 12–36 px 之间。');
   return { target, fontSize };
-}
-export function nativeCaptionTrack(source, target, { sourceTrack = {}, targetName } = {}) {
-  const languageCode = youtubeLanguage(source), translatedCode = youtubeLanguage(target);
-  const kind = sourceTrack.kind === 'asr' ? 'asr' : '';
-  const name = typeof sourceTrack.name === 'string' ? sourceTrack.name.slice(0, 200) : '';
-  let translatedName = targetName;
-  if (!translatedName) { try { translatedName = new Intl.DisplayNames(['en'], { type: 'language' }).of(translatedCode); } catch { translatedName = translatedCode; } }
-  return { languageCode, languageName: sourceTrack.languageName || 'English', kind, name,
-    ...(sourceTrack.vss_id ? { vss_id: sourceTrack.vss_id } : !name ? { vss_id: `${kind === 'asr' ? 'a.' : '.'}${languageCode}` } : {}),
-    translationLanguage: { languageCode: translatedCode, languageName: String(translatedName).slice(0, 100) } };
 }
 export function verifyHealth(data) {
   if (data?.service !== SERVICE_ID || data.apiVersion !== API_VERSION || data.provider !== 'youtube-unified' || data.ok !== true) throw new Error('请重启本机 start.command，以载入新版字幕桥。');

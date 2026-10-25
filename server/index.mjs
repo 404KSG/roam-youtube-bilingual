@@ -23,7 +23,7 @@ async function readJSON(request) {
   }
   try { return JSON.parse(Buffer.concat(chunks).toString()); } catch { throw Object.assign(new Error('JSON 格式无效。'), { status: 400 }); }
 }
-export function makeServer({ port = 17321, captionFetcher = fetchCaptions, infoFetcher = fetchVideoInfo, captionReader = createCaptionReader(), verifyPeer = createPeerVerifier() } = {}) {
+export function makeServer({ port = 17321, captionFetcher = fetchCaptions, infoFetcher = fetchVideoInfo, nativeCcReader = createCaptionReader(), verifyPeer = createPeerVerifier() } = {}) {
   const infos = new Map(), captions = new Map();
   let fetching = false;
   const cache = (map, key, value) => { map.set(key, value); while (map.size > 20) map.delete(map.keys().next().value); return value; };
@@ -50,22 +50,20 @@ export function makeServer({ port = 17321, captionFetcher = fetchCaptions, infoF
       return;
     }
     if (req.method === 'GET' && path === '/v1/youtube/health') return json(200, { ok: true, service: SERVICE_ID, apiVersion: API_VERSION, version: VERSION, provider: 'youtube-unified', platform: process.platform });
-    if (req.method !== 'POST' || !['/v1/youtube/video-info', '/v1/youtube/captions', '/v1/youtube/caption-state'].includes(path)) return json(404, { error: '接口不存在。' });
+    if (req.method !== 'POST' || !['/v1/youtube/video-info', '/v1/youtube/captions', '/v1/youtube/native-cc-state'].includes(path)) return json(404, { error: '接口不存在。' });
     const controller = new AbortController();
     res.once('close', () => { if (!res.writableEnded) controller.abort(); });
     try {
       const body = await readJSON(req);
       if (!/^[\w-]{11}$/.test(body?.videoId || '')) return json(400, { error: '无效的 YouTube 视频 ID。' });
-      if (path === '/v1/youtube/caption-state') {
-        if (Object.keys(body).some((key) => !['videoId', 'target', 'frame'].includes(key)) || !validRect(body.frame) || !/^[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})*$/.test(body.target || '')) return json(400, { error: '字幕读取范围无效。' });
+      if (path === '/v1/youtube/native-cc-state') {
+        if (Object.keys(body).some((key) => !['videoId', 'frame'].includes(key)) || !validRect(body.frame)) return json(400, { error: '原生字幕状态范围无效。' });
         await verifyPeer(req.socket, actualPort);
         controller.signal.throwIfAborted();
-        // Reading the desktop requires an already-discovered, exact video title.
-        const info = infos.get(body.videoId);
-        if (!info) return json(409, { error: '请先加载当前视频的信息。' });
-        if (!info.languages.some((language) => language.code === body.target)) return json(400, { error: '该视频未提供所选译文语言。' });
-        const result = await captionReader.read({ title: info.title, frame: body.frame, target: body.target, signal: controller.signal });
-        return json(200, { ...result, videoId: body.videoId, target: body.target });
+        const info = await getInfo(body.videoId, controller.signal);
+        const result = await nativeCcReader.read({ title: info.title, frame: body.frame, signal: controller.signal });
+        const state = ['on', 'off', 'unknown'].includes(result?.state) ? result.state : 'unknown';
+        return json(200, { videoId: body.videoId, state });
       }
       if (fetching) return json(429, { error: '正在获取字幕信息，请稍后重试。' });
       fetching = true;
@@ -73,9 +71,11 @@ export function makeServer({ port = 17321, captionFetcher = fetchCaptions, infoF
         const info = await getInfo(body.videoId, controller.signal);
         if (path === '/v1/youtube/video-info') return json(200, info);
         if (!info.sourceLanguage) return json(422, { error: '该视频没有可用的英文原字幕。' });
-        const key = `${body.videoId}:${info.sourceLanguage}`;
-        const cues = captions.get(key) || cache(captions, key, await captionFetcher(body.videoId, info.sourceLanguage, controller.signal));
-        return json(200, { videoId: body.videoId, sourceLanguage: info.sourceLanguage, cues });
+        const target = body.target;
+        if (!/^[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})*$/.test(target || '') || (target !== info.sourceLanguage && !info.languages.some((language) => language.code === target))) return json(400, { error: '该视频未提供所选字幕语言。' });
+        const key = `${body.videoId}:${target}`;
+        const cues = captions.get(key) || cache(captions, key, await captionFetcher(body.videoId, target, controller.signal));
+        return json(200, { videoId: body.videoId, language: target, cues });
       } finally { fetching = false; }
     } catch (error) {
       if (error.name === 'AbortError') return;

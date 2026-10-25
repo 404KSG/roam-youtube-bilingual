@@ -1,6 +1,7 @@
 import { videoIdFromUrl, normalizeCues, activeCueIndex } from './core.mjs';
 import { YouTubeClock } from './clock.mjs';
 import { VideoSurface } from './surface.mjs';
+import { claimRenderer, releaseRenderer } from './lifecycle.mjs';
 import { VERSION, SERVICE_URL, DEFAULT_CONFIG, validateConfig, verifyHealth, singleLine, fittedFontSize } from './protocol.mjs';
 
 const STORAGE_KEY = 'roam-youtube-bilingual/session/v1';
@@ -10,13 +11,14 @@ const videos = new Map();
 let config = { ...DEFAULT_CONFIG };
 let active = false, observer, scanTimer, surfaceTimer, settings, globalStyle;
 let commandRegistered = false;
+const lifecycle = { active: false, unload: () => onunload() };
 const el = (tag, cls, text) => { const node = document.createElement(tag); if (cls) node.className = cls; if (text !== undefined) node.textContent = text; return node; };
 const button = (text, callback, cls = '') => { const node = el('button', cls, text); node.type = 'button'; node.addEventListener('click', callback); return node; };
 function saveConfig(next) {
   const old = config; config = validateConfig(next);
   try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(config)); } catch { /* Optional session storage. */ }
   for (const video of videos.values()) {
-    if (old.target !== config.target) video.changeTarget();
+    if (old.target !== config.target) void video.changeTarget();
     else video.drawPair();
   }
 }
@@ -27,11 +29,11 @@ async function request(path, body, signal) {
       method: body ? 'POST' : 'GET', credentials: 'omit',
       headers: body ? { 'Content-Type': 'application/json' } : {},
       ...(body ? { body: JSON.stringify(body) } : {}),
-      signal: AbortSignal.any([signal || new AbortController().signal, AbortSignal.timeout(path.endsWith('caption-state') ? 3500 : 90000)]),
+      signal: AbortSignal.any([signal || new AbortController().signal, AbortSignal.timeout(path.endsWith('native-cc-state') ? 3500 : 90000)]),
     });
   } catch (error) {
     if (signal?.aborted || error.name === 'AbortError') throw new DOMException('Aborted', 'AbortError');
-    throw new Error('本机字幕桥未连接，请运行新版 start.command。');
+    throw new Error('本机字幕服务未连接，请运行新版 start.command。');
   }
   let data;
   try { data = await response.json(); } catch { throw new Error('本机字幕服务响应无效。'); }
@@ -46,12 +48,12 @@ function closeSettings(ref = settings) {
   ref.closed = true; ref.abort.abort();
   if (ref.dialog.open) ref.dialog.close(); ref.host.remove();
   if (settings === ref) settings = null;
-  if (!ref.owner.disposed) { ref.owner.toolbarButton.setAttribute('aria-expanded', 'false'); if (active) ref.owner.sync(); }
+  if (!ref.owner.disposed) { ref.owner.toolbarButton.setAttribute('aria-expanded', 'false'); ref.owner.closeNativeGate(); if (active) ref.owner.sync(); }
 }
 function openSettings(owner) {
   if (!owner || owner.disposed) return;
   if (settings) { settings.dialog.focus(); return; }
-  owner.captureRequest?.abort(); owner.captureRequest = null;
+  owner.closeNativeGate();
   const host = el('div', 'ryb-settings-host'); host.style.cssText = 'position:fixed!important;inset:0!important;pointer-events:none!important;z-index:2147483647!important';
   const shadow = host.attachShadow({ mode: 'open' }); const style = el('style'); style.textContent = STYLE;
   const dialog = el('dialog', 'ryb-settings');
@@ -69,7 +71,7 @@ function openSettings(owner) {
   const sizeText = el('span', '', `字号 ${config.fontSize} px`);
   const font = el('input'); font.type = 'range'; font.name = 'fontSize'; font.min = '12'; font.max = '36'; font.step = '1'; font.value = String(config.fontSize); font.setAttribute('aria-label', '双语字号');
   fontLabel.append(sizeText, font); dialog.append(fontLabel);
-  dialog.append(el('p', 'ryb-hint', '始终两行、共用背景；长句会用足画面宽度并缩小字号。'));
+  dialog.append(el('p', 'ryb-hint', '始终两行、共用背景；仅在原生 CC 已确认关闭后显示。'));
   const status = el('p', 'ryb-status'); status.setAttribute('role', 'status'); dialog.append(status);
   const footer = el('div', 'ryb-settings-footer'); footer.append(button('完成', () => closeSettings(ref), 'ryb-primary')); dialog.append(footer);
   font.addEventListener('input', () => { try { saveConfig({ ...config, fontSize: Number(font.value) }); sizeText.textContent = `字号 ${config.fontSize} px`; } catch (error) { status.textContent = error.message; } });
@@ -104,7 +106,7 @@ function toolbarIcon() {
 class VideoCaptions {
   constructor(iframe) {
     this.iframe = iframe; this.videoId = videoIdFromUrl(iframe.src); this.embedId = this.videoId;
-    this.cues = []; this.time = 0; this.epoch = 0; this.enabled = false; this.loading = false;
+    this.tracks = new Map(); this.time = 0; this.epoch = 0; this.enabled = false; this.loading = false; this.ccState = 'unknown';
     this.surface = new VideoSurface(iframe, STYLE); this.surface.host.dataset.version = VERSION;
     this.box = el('div', 'ryb-caption-box'); this.box.hidden = true; this.box.setAttribute('aria-label', '双语字幕');
     this.source = el('div', 'ryb-line ryb-source'); this.source.dir = 'ltr';
@@ -143,95 +145,97 @@ class VideoCaptions {
     }
     return this.infoPromise;
   }
+  async loadTrack(language, signal) {
+    if (this.tracks.has(language)) return this.tracks.get(language);
+    const data = await request('/v1/youtube/captions', { videoId: this.videoId, target: language }, signal);
+    if (data.videoId !== this.videoId || data.language !== language) throw new Error('字幕与当前视频或语言不匹配。');
+    const cues = normalizeCues(data.cues);
+    if (!cues.length) throw new Error('所选字幕没有有效时间轴。');
+    this.tracks.set(language, cues); return cues;
+  }
   connect() {
     if (this.clock) return;
-    this.clock = new YouTubeClock(this.iframe, (time) => {
-      if (this.disposed) return;
-      if (Math.abs(time - this.time) > 2) this.clearPair();
-      this.time = time;
-    }, (state) => {
-      if (this.enabled && /未收到|中断/.test(state)) this.notice(state);
-      else if (state === '已连接播放器' && /未收到播放时间|播放时间信号中断/.test(this.noticeBox.textContent)) this.notice('等待 YouTube 译文…');
-    }, (id) => {
-      this.turnOff(); this.videoId = id; this.info = null; this.cues = []; this.notice('视频已切换，请重新开启双语。', 4000);
-    });
+    this.clock = new YouTubeClock(this.iframe, (time) => { if (!this.disposed) { this.time = time; this.updatePair(); } }, (state) => {
+      if (this.enabled && /中断/.test(state)) { this.clearPair(); this.notice(state); }
+    }, (id) => this.videoChanged(id), { onApiChange: () => this.closeNativeGate(), onIframeLoad: () => this.closeNativeGate() });
+  }
+  videoChanged(id) {
+    this.closeNativeGate(); this.turnOff(); this.videoId = id; this.embedId = id; this.info = null; this.tracks.clear();
+    this.notice('视频已切换，请重新开启双语。', 4000);
   }
   async turnOn() {
     if (this.enabled || this.disposed) return;
     for (const video of videos.values()) if (video !== this) video.turnOff();
     this.turnOff(); this.enabled = true; this.loading = true; this.lastError = '';
     const epoch = this.epoch; const abort = this.startRequest = new AbortController();
-    this.updateIcon(); this.notice('正在准备 YouTube 双语字幕…');
+    this.updateIcon(); this.notice('正在下载英文与译文字幕…');
     try {
       verifyHealth(await request('/v1/youtube/health', undefined, abort.signal));
       const info = await this.loadInfo(abort.signal);
       if (!info.sourceLanguage) throw new Error('该视频没有可用的英文原字幕。');
       if (!info.languages.some((item) => item.code === config.target)) throw new Error('请在设置中选择本视频支持的译文语言。');
-      if (!this.cues.length) {
-        const data = await request('/v1/youtube/captions', { videoId: this.videoId }, abort.signal);
-        if (this.disposed || epoch !== this.epoch || abort.signal.aborted) return;
-        if (data.videoId !== this.videoId) throw new Error('字幕与当前视频不匹配。');
-        this.cues = normalizeCues(data.cues);
-      }
+      await this.loadTrack(info.sourceLanguage, abort.signal);
+      await this.loadTrack(config.target, abort.signal);
       if (this.disposed || epoch !== this.epoch || abort.signal.aborted) return;
-      this.connect(); this.applyLanguage();
-      this.settleUntil = Date.now() + 1700; this.notice('等待 YouTube 译文…');
+      this.connect(); this.closeNativeGate(); this.notice('正在关闭原生 CC 并确认状态…');
     } catch (error) {
       if (error.name !== 'AbortError' && epoch === this.epoch) { this.turnOff(); this.lastError = error.message; this.notice(error.message); }
     } finally { if (this.startRequest === abort) { this.startRequest = null; this.loading = false; this.updateIcon(); } }
   }
   clearPair() { this.pair = null; this.box.hidden = true; this.source.textContent = ''; this.target.textContent = ''; }
+  closeNativeGate() {
+    this.ccState = 'unknown'; this.ccRequest?.abort(); this.ccRequest = null; this.clearPair();
+    this.clock?.unloadCaptions(); this.nextCcCheck = 0;
+  }
   turnOff() {
     this.epoch++; this.enabled = false; this.loading = false;
-    this.startRequest?.abort(); this.startRequest = null; this.captureRequest?.abort(); this.captureRequest = null;
-    this.clock?.clearNativeTranslation(); this.clearPair(); clearTimeout(this.noticeTimer); this.noticeBox.hidden = true; this.updateIcon();
+    this.startRequest?.abort(); this.startRequest = null; this.ccRequest?.abort(); this.ccRequest = null;
+    this.ccState = 'unknown'; this.clock?.unloadCaptions(); this.clearPair(); clearTimeout(this.noticeTimer); this.noticeBox.hidden = true; this.updateIcon();
   }
-  applyLanguage() {
-    if (!this.info || !this.clock) return;
-    const language = this.info.languages.find((item) => item.code === config.target);
-    this.clock.setNativeTranslation(this.info.playerSourceLanguage, config.target, { sourceTrack: this.info.sourceTrack, targetName: language?.name });
-  }
-  changeTarget() {
-    this.clearPair();
-    if (this.loading) return; // The startup path applies the latest target after source loading.
-    this.epoch++; this.captureRequest?.abort(); this.captureRequest = null;
-    if (this.enabled && this.info) { this.applyLanguage(); this.settleUntil = Date.now() + 3300; this.notice('正在切换 YouTube 字幕语言…'); }
+  async changeTarget() {
+    this.clearPair(); this.closeNativeGate();
+    if (!this.enabled || this.loading || !this.info) return;
+    this.epoch++; const epoch = this.epoch; const abort = this.startRequest = new AbortController(); this.loading = true; this.updateIcon(); this.notice('正在下载所选译文字幕…');
+    try {
+      await this.loadTrack(config.target, abort.signal);
+      if (this.disposed || epoch !== this.epoch || abort.signal.aborted) return;
+      this.closeNativeGate(); this.notice('正在关闭原生 CC 并确认状态…');
+    } catch (error) {
+      if (error.name !== 'AbortError' && epoch === this.epoch) { this.turnOff(); this.lastError = error.message; this.notice(error.message); }
+    } finally { if (this.startRequest === abort) { this.startRequest = null; this.loading = false; this.updateIcon(); } }
   }
   screenFrame() {
     const rect = this.iframe.getBoundingClientRect();
     const scale = outerWidth > 0 && innerWidth > 0 ? outerWidth / innerWidth : 1;
     return { x: screenX + rect.x * scale, y: screenY + outerHeight - innerHeight * scale + rect.y * scale, width: rect.width * scale, height: rect.height * scale };
   }
-  async capture() {
-    if (!this.enabled || this.loading || this.disposed || this.captureRequest || settings || document.hidden || this.surface.host.style.display === 'none' || !this.clock?.isSynchronized() || Date.now() < (this.settleUntil || 0) || Date.now() < (this.retryAfter || 0)) return;
-    const epoch = this.epoch, videoId = this.videoId, target = config.target;
-    const before = Date.now(), playback = this.clock.currentTime(), rate = this.clock.state === 1 ? this.clock.rate : 0;
-    const frame = this.screenFrame(); const abort = this.captureRequest = new AbortController();
+  async checkNativeCc() {
+    if (!this.enabled || this.loading || this.disposed || this.ccRequest || settings || document.hidden || this.surface.host.style.display === 'none' || Date.now() < (this.nextCcCheck || 0)) return;
+    const epoch = this.epoch, videoId = this.videoId, abort = this.ccRequest = new AbortController();
     try {
-      const data = await request('/v1/youtube/caption-state', { videoId, target, frame }, abort.signal);
-      if (this.disposed || epoch !== this.epoch || abort.signal.aborted || data.videoId !== videoId || data.target !== target) return;
-      const currentFrame = this.screenFrame();
-      if (Math.abs(currentFrame.width - frame.width) > 4 || Math.abs(currentFrame.height - frame.height) > 4) { this.clearPair(); return; }
-      if (!data.matched) {
-        if (data.reason !== 'busy') this.clearPair();
-        if (Number.isFinite(data.retryAfterMs)) this.retryAfter = Date.now() + Math.max(0, Math.min(5000, data.retryAfterMs));
+      const data = await request('/v1/youtube/native-cc-state', { videoId, frame: this.screenFrame() }, abort.signal);
+      if (this.disposed || epoch !== this.epoch || abort.signal.aborted || data.videoId !== videoId) return;
+      this.ccState = data.state === 'off' ? 'off' : data.state === 'on' ? 'on' : 'unknown';
+      this.nextCcCheck = Date.now() + 700;
+      if (this.ccState !== 'off') {
+        this.clearPair();
+        if (this.ccState === 'on') { this.clock?.unloadCaptions(); this.notice('原生 CC 尚未确认关闭，双语字幕保持隐藏。'); }
         return;
       }
-      const now = Date.now();
-      if (typeof data.text !== 'string' || data.text.length > 1200 || !Number.isFinite(data.sampledAt) || data.sampledAt < before - 100 || data.sampledAt > now + 100) throw new Error('字幕桥返回了无效时间或文本。');
-      const bounds = data.bounds;
-      if (!bounds || !['left', 'top', 'width', 'height'].every((key) => Number.isFinite(bounds[key])) || bounds.width <= 0 || bounds.width > 1.1 || bounds.left < -.05 || bounds.left + bounds.width > 1.05 || bounds.height <= 0 || bounds.height > .7 || bounds.top < 0 || bounds.top + bounds.height > 1.02) throw new Error('字幕读取位置无效。');
-      const time = playback + Math.max(0, data.sampledAt - before) / 1000 * rate;
-      const index = activeCueIndex(this.cues, time);
-      if (index < 0 || Math.abs(this.clock.currentTime() - time) > 1.5) { this.clearPair(); return; }
-      this.pair = { source: singleLine(this.cues[index].text), target: singleLine(data.text), bounds, sampledAt: data.sampledAt, time };
-      this.noticeBox.hidden = true; this.lastError = ''; this.drawPair();
+      this.noticeBox.hidden = true; this.lastError = ''; this.updatePair();
     } catch (error) {
-      if (error.name !== 'AbortError' && epoch === this.epoch) { this.clearPair(); this.lastError = error.message; this.notice(error.message); this.retryAfter = Date.now() + 2000; }
-    } finally { if (this.captureRequest === abort) this.captureRequest = null; }
+      if (error.name !== 'AbortError' && epoch === this.epoch) { this.ccState = 'unknown'; this.clearPair(); this.lastError = error.message; this.notice(error.message); this.nextCcCheck = Date.now() + 2000; }
+    } finally { if (this.ccRequest === abort) this.ccRequest = null; }
+  }
+  updatePair() {
+    if (!this.enabled || this.loading || this.ccState !== 'off' || this.disposed || !this.clock?.isSynchronized()) { this.clearPair(); return; }
+    const sourceCues = this.tracks.get(this.info?.sourceLanguage), targetCues = this.tracks.get(config.target);
+    const source = sourceCues?.[activeCueIndex(sourceCues, this.time)], target = targetCues?.[activeCueIndex(targetCues, this.time)];
+    if (!source || !target) { this.clearPair(); return; }
+    this.pair = { source: singleLine(source.text), target: singleLine(target.text) }; this.drawPair();
   }
   drawPair() {
-    if (!this.enabled || !this.pair || this.disposed) { this.box.hidden = true; return; }
+    if (!this.enabled || this.ccState !== 'off' || !this.pair || this.disposed) { this.box.hidden = true; return; }
     const rect = this.iframe.getBoundingClientRect(), pair = this.pair;
     if (rect.width < 160 || rect.height < 90 || !pair.source || !pair.target) { this.box.hidden = true; return; }
     if (this.source.textContent !== pair.source) this.source.textContent = pair.source;
@@ -241,14 +245,10 @@ class VideoCaptions {
     const measured = Math.max(this.measure.measureText(pair.source).width, this.measure.measureText(pair.target).width);
     const font = fittedFontSize(config.fontSize, available, measured);
     const textWidth = measured * font / config.fontSize;
-    const width = Math.min(rect.width, Math.max(textWidth + 24, pair.bounds.width * rect.width + 24));
-    const height = Math.max(font * 2.5 + 12, pair.bounds.height * rect.height + 20);
-    const bottom = Math.min(rect.height, (pair.bounds.top + pair.bounds.height) * rect.height + 10);
-    const top = Math.max(0, bottom - height);
-    Object.assign(this.box.style, { width: `${width}px`, height: `${height}px`, left: `${Math.max(0, (rect.width - width) / 2)}px`, top: `${top}px`, fontSize: `${font}px`, borderRadius: width >= rect.width - 0.5 ? '0px' : '4px' });
+    const width = Math.min(rect.width, Math.max(textWidth + 24, 80));
+    const height = font * 2.5 + 12, bottom = Math.max(10, rect.height * .08);
+    Object.assign(this.box.style, { width: `${width}px`, height: `${height}px`, left: `${Math.max(0, (rect.width - width) / 2)}px`, top: `${Math.max(0, rect.height - bottom - height)}px`, fontSize: `${font}px`, borderRadius: width >= rect.width - .5 ? '0px' : '4px' });
     this.box.hidden = false;
-    // Validate actual shaped text too (e.g. Arabic or fallback CJK fonts), not
-    // just canvas estimates. Keep the complete text on one line per language.
     const range = document.createRange();
     const renderedWidth = Math.max(...[this.source, this.target].map((row) => { range.selectNodeContents(row); return range.getBoundingClientRect().width; }));
     const innerWidth = Math.max(1, width - 24);
@@ -256,14 +256,8 @@ class VideoCaptions {
     this.box.style.fontSize = `${finalFont}px`; this.box.dataset.fontSize = String(finalFont);
   }
   sync() {
-    const rect = this.iframe.getBoundingClientRect();
-    const geometry = `${rect.width.toFixed(1)}:${rect.height.toFixed(1)}`;
-    if (this.geometry && this.geometry !== geometry) this.clearPair();
-    this.geometry = geometry;
     this.mountToolbar(); this.surface.sync({ blocked: !!settings });
-    if (this.pair && !settings && Date.now() - this.pair.sampledAt > 1400) this.clearPair();
-    this.drawPair();
-    if (Date.now() - (this.lastCaptureAttempt || 0) >= (this.clock?.state === 1 ? 300 : 500)) { this.lastCaptureAttempt = Date.now(); void this.capture(); }
+    this.drawPair(); void this.checkNativeCc();
   }
   destroy() { this.turnOff(); this.disposed = true; this.infoAbort?.abort(); this.clock?.destroy(); this.surface.destroy(); this.toolbarButton.remove(); this.fallback?.remove(); if (settings?.owner === this) closeSettings(); }
 }
@@ -273,7 +267,9 @@ function scan() {
   for (const iframe of document.querySelectorAll('iframe[src]')) if (!videos.has(iframe) && videoIdFromUrl(iframe.src) && new URL(iframe.src).pathname.startsWith('/embed/')) videos.set(iframe, new VideoCaptions(iframe));
 }
 function onload() {
-  onunload(); active = true;
+  if (lifecycle.active) onunload();
+  if (!claimRenderer(window, lifecycle, { unknownRenderer: () => !!document.querySelector('.ryb-surface-host,.ryb-settings-host,.ryb-toolbar-button,[data-ryb-toolbar]') })) { console.error('Roam YouTube Bilingual 未启动：旧渲染实例无法安全卸载。'); return false; }
+  active = true;
   try { config = validateConfig(JSON.parse(sessionStorage.getItem(STORAGE_KEY) || '{}')); } catch { config = { ...DEFAULT_CONFIG }; }
   globalStyle = el('style'); globalStyle.dataset.rybToolbar = 'true'; globalStyle.textContent = '.ryb-toolbar-button{width:30px!important;min-width:30px!important;height:30px!important;padding:6px!important;display:inline-flex!important;align-items:center;justify-content:center;background:transparent;border:0;border-radius:3px;color:#607789;cursor:pointer}.ryb-toolbar-button:hover{background:#6077891c}.ryb-toolbar-button[data-active="true"]{color:#2378b5;background:#2378b512}.ryb-toolbar-button svg{display:block;pointer-events:none}.ryb-toolbar-fallback{display:flex;justify-content:flex-end;min-height:30px}.ryb-toolbar-button:focus-visible{outline:2px solid #2378b5;outline-offset:2px}'; document.head.append(globalStyle);
   observer = new MutationObserver((records) => {
@@ -287,12 +283,12 @@ function onload() {
     window.roamAlphaAPI.ui.commandPalette.addCommand({ label: fullscreenCommand, callback: () => { const video = [...videos.values()].find((v) => v.enabled) || [...videos.values()][0]; if (video) void video.surface.toggleFullscreen().catch((error) => video.notice(error.message)); } });
     commandRegistered = true;
   }
-  scan();
+  scan(); return true;
 }
 function onunload() {
   active = false; observer?.disconnect(); observer = null; clearTimeout(scanTimer); scanTimer = null; clearInterval(surfaceTimer); surfaceTimer = null;
   closeSettings(); for (const video of videos.values()) video.destroy(); videos.clear(); globalStyle?.remove(); globalStyle = null;
   if (commandRegistered) { window.roamAlphaAPI?.ui?.commandPalette?.removeCommand({ label: commandLabel }); window.roamAlphaAPI?.ui?.commandPalette?.removeCommand({ label: fullscreenCommand }); }
-  commandRegistered = false;
+  commandRegistered = false; releaseRenderer(window, lifecycle);
 }
 export default { onload, onunload };

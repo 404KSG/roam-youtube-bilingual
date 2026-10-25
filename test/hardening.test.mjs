@@ -18,7 +18,7 @@ test('invalid time fields and malformed JSON3 entries fail safely', () => {
   assert.deepEqual(parseJSON3({ events: [null, {}, { tStartMs: 0, dDurationMs: 1000, segs: [null, { utf8: 'Valid' }] }] }), [{ id: 0, start: 0, end: 1, text: 'Valid' }]);
 });
 
-function withClock(callback) {
+function withClock(callback, options = {}) {
   const originalGlobals = { window: globalThis.window, location: globalThis.location };
   globalThis.window = new EventTarget();
   globalThis.location = { origin: 'https://roamresearch.com' };
@@ -29,7 +29,7 @@ function withClock(callback) {
   const sent = [];
   iframe.contentWindow = { postMessage: (data) => sent.push(JSON.parse(data)) };
   let now = 0;
-  const clock = new YouTubeClock(iframe, () => {}, () => {}, () => {}, { now: () => now });
+  const clock = new YouTubeClock(iframe, () => {}, () => {}, () => {}, { now: () => now, ...options });
   const deliver = (info) => {
     const event = new Event('message');
     Object.defineProperties(event, { data: { value: { event: 'infoDelivery', info } }, source: { value: iframe.contentWindow }, origin: { value: 'https://www.youtube.com' } });
@@ -38,6 +38,15 @@ function withClock(callback) {
   try { callback({ clock, iframe, sent, deliver, advance: (value) => { now += value; } }); }
   finally { clock.destroy(); for (const [key, value] of Object.entries(originalGlobals)) if (value === undefined) delete globalThis[key]; else globalThis[key] = value; }
 }
+test('API changes notify the renderer so its native-CC gate can close immediately', () => {
+  let changes = 0;
+  withClock(({ iframe }) => {
+    const event = new Event('message');
+    Object.defineProperties(event, { data: { value: { event: 'onApiChange' } }, source: { value: iframe.contentWindow }, origin: { value: 'https://www.youtube.com' } });
+    window.dispatchEvent(event);
+    assert.equal(changes, 1);
+  }, { onApiChange: () => { changes++; } });
+});
 test('clock rebases state/rate-only updates and never extrapolates indefinitely', () => withClock(({ clock, deliver, advance }) => {
   deliver({ currentTime: 10, playerState: 1, playbackRate: 1 });
   advance(500); deliver({ playbackRate: 2 });

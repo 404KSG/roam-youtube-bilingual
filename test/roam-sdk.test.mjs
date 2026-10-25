@@ -13,10 +13,9 @@ test('existing Roam YT.Player keeps its message channel id', () => {
     assert.equal(clock.channelId, 1);
     assert.equal(sent[0].event, 'listening'); assert.equal(sent[0].id, 1);
     clock.readSdk(); assert.equal(clock.currentTime(), 321); assert.equal(clock.isSynchronized(), true);
-    clock.time = 12; clock.hasTime = true; clock.ready = true;
-    clock.setNativeTranslation('en', 'ja', { sourceTrack: { kind: '', name: '', vss_id: '.en', languageName: 'English' }, targetName: 'Japanese' });
-    const selection = sent.find((message) => message.func === 'setOption');
-    assert.deepEqual(selection.args[2], { languageCode: 'en', languageName: 'English', kind: '', name: '', vss_id: '.en', translationLanguage: { languageCode: 'ja', languageName: 'Japanese' } });
+    clock.unloadCaptions();
+    assert.deepEqual(sent.at(-1), { event: 'command', func: 'unloadModule', args: ['captions'] });
+    assert.equal(sent.some((message) => message.func === 'setOption' || message.func === 'loadModule'), false);
   } finally {
     clock?.destroy();
     if (oldWindow === undefined) delete globalThis.window; else globalThis.window = oldWindow;
