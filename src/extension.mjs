@@ -23,10 +23,13 @@ function saveConfig(next) {
     else video.drawPair();
   }
 }
-async function request(path, body, signal) {
+async function request(path, body, signal, observation) {
   let response;
+  const url = new URL(path, SERVICE_URL);
+  url.searchParams.set('client_version', VERSION);
+  if (observation) url.searchParams.set('previous_cc', observation);
   try {
-    response = await fetch(`${SERVICE_URL}${path}`, {
+    response = await fetch(url.href, {
       method: body ? 'POST' : 'GET', credentials: 'omit',
       headers: body ? { 'Content-Type': 'application/json' } : {},
       ...(body ? { body: JSON.stringify(body) } : {}),
@@ -78,6 +81,7 @@ function openSettings(owner) {
   fontLabel.append(sizeText, font); dialog.append(fontLabel);
   dialog.append(el('p', 'ryb-hint', 'English above translation. Two lines share one background; long captions shrink to fit.'));
   const status = el('p', 'ryb-status'); status.setAttribute('role', 'status'); status.textContent = owner.loading ? owner.noticeBox.textContent || 'Preparing subtitles…' : owner.lastError || ''; ref.status = status; dialog.append(status);
+  dialog.append(el('p', 'ryb-hint', `Version ${VERSION}`));
   const footer = el('div', 'ryb-settings-footer'); footer.append(button('Done', () => closeSettings(ref), 'ryb-primary')); dialog.append(footer);
   font.addEventListener('input', () => { try { saveConfig({ ...config, fontSize: Number(font.value) }); sizeText.textContent = `Font size: ${config.fontSize} px`; } catch (error) { status.textContent = error.message; } });
   language.addEventListener('change', () => { try { saveConfig({ ...config, target: language.value }); } catch (error) { status.textContent = error.message; } });
@@ -257,7 +261,7 @@ class VideoCaptions {
     const epoch = this.epoch, videoId = this.videoId, abort = this.ccRequest = new AbortController();
     const before = Date.now(), frame = this.screenFrame();
     try {
-      const data = await request('/v1/youtube/native-cc-state', { videoId, frame }, abort.signal);
+      const data = await request('/v1/youtube/native-cc-state', { videoId, frame }, abort.signal, this.ccState);
       if (this.disposed || epoch !== this.epoch || abort.signal.aborted || data.videoId !== videoId) return;
       const currentFrame = this.screenFrame();
       if (Date.now() - before > 1200 || ['x', 'y', 'width', 'height'].some(key => Math.abs(frame[key] - currentFrame[key]) > 4)) { this.closeNativeGate(); return; }
