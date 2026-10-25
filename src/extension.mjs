@@ -149,7 +149,10 @@ class VideoCaptions {
       if (this.disposed) return;
       if (Math.abs(time - this.time) > 2) this.clearPair();
       this.time = time;
-    }, (state) => { if (this.enabled && /未收到|中断/.test(state)) this.notice(state); }, (id) => {
+    }, (state) => {
+      if (this.enabled && /未收到|中断/.test(state)) this.notice(state);
+      else if (state === '已连接播放器' && /未收到播放时间|播放时间信号中断/.test(this.noticeBox.textContent)) this.notice('等待 YouTube 译文…');
+    }, (id) => {
       this.turnOff(); this.videoId = id; this.info = null; this.cues = []; this.notice('视频已切换，请重新开启双语。', 4000);
     });
   }
@@ -171,7 +174,7 @@ class VideoCaptions {
         this.cues = normalizeCues(data.cues);
       }
       if (this.disposed || epoch !== this.epoch || abort.signal.aborted) return;
-      this.connect(); this.clock.setNativeTranslation(info.playerSourceLanguage, config.target);
+      this.connect(); this.applyLanguage();
       this.settleUntil = Date.now() + 1700; this.notice('等待 YouTube 译文…');
     } catch (error) {
       if (error.name !== 'AbortError' && epoch === this.epoch) { this.turnOff(); this.lastError = error.message; this.notice(error.message); }
@@ -183,11 +186,16 @@ class VideoCaptions {
     this.startRequest?.abort(); this.startRequest = null; this.captureRequest?.abort(); this.captureRequest = null;
     this.clock?.clearNativeTranslation(); this.clearPair(); clearTimeout(this.noticeTimer); this.noticeBox.hidden = true; this.updateIcon();
   }
+  applyLanguage() {
+    if (!this.info || !this.clock) return;
+    const language = this.info.languages.find((item) => item.code === config.target);
+    this.clock.setNativeTranslation(this.info.playerSourceLanguage, config.target, { sourceTrack: this.info.sourceTrack, targetName: language?.name });
+  }
   changeTarget() {
     this.clearPair();
     if (this.loading) return; // The startup path applies the latest target after source loading.
     this.epoch++; this.captureRequest?.abort(); this.captureRequest = null;
-    if (this.enabled && this.info) { this.clock?.setNativeTranslation(this.info.playerSourceLanguage, config.target); this.settleUntil = Date.now() + 3300; this.notice('正在切换 YouTube 字幕语言…'); }
+    if (this.enabled && this.info) { this.applyLanguage(); this.settleUntil = Date.now() + 3300; this.notice('正在切换 YouTube 字幕语言…'); }
   }
   screenFrame() {
     const rect = this.iframe.getBoundingClientRect();

@@ -17,7 +17,21 @@ export function sanitizeVideoInfo(meta, videoId) {
     const name = tracks.find((track) => typeof track.name === 'string')?.name || code;
     languages.set(code, { code, name: name.slice(0, 100) });
   }
-  return { videoId, title: meta.title.trim().slice(0, 1000), sourceLanguage, playerSourceLanguage: sourceLanguage?.replace(/-orig$/, '') || 'en', languages: [...languages.values()] };
+  let playerSourceLanguage = sourceLanguage?.replace(/-orig$/, '') || 'en';
+  let kind = '', name = '', vssId;
+  const sourceTracks = manual[sourceLanguage] || automatic[sourceLanguage] || [];
+  const selected = sourceTracks.find((track) => track.ext === 'json3') || sourceTracks[0];
+  try {
+    const url = new URL(selected?.url);
+    const language = url.searchParams.get('lang');
+    if (LANGUAGE.test(language || '')) playerSourceLanguage = language;
+    kind = url.searchParams.get('kind') === 'asr' ? 'asr' : '';
+    name = url.searchParams.get('name') || '';
+    vssId = url.searchParams.get('vss_id') || undefined;
+  } catch { /* A source without a URL will fail at caption fetch rather than expose raw metadata. */ }
+  const sourceTrack = { languageCode: playerSourceLanguage, languageName: 'English', kind, name: name.slice(0, 200),
+    ...(vssId ? { vss_id: vssId.slice(0, 200) } : !name ? { vss_id: `${kind === 'asr' ? 'a.' : '.'}${playerSourceLanguage}` } : {}) };
+  return { videoId, title: meta.title.trim().slice(0, 1000), sourceLanguage, playerSourceLanguage, sourceTrack, languages: [...languages.values()] };
 }
 
 export async function fetchVideoInfo(videoId, signal) {

@@ -18,7 +18,11 @@ export class YouTubeClock {
     this.originalSrc = iframe.getAttribute('src');
     const url = new URL(iframe.src);
     this.origin = url.origin;
-    this.channelId = `ryb-${Math.random().toString(36).slice(2)}`;
+    // Roam already owns a YT.Player instance. Reusing its message id prevents
+    // stealing infoDelivery from its timestamp/seek controls.
+    let sdk;
+    try { const candidate = window.YT?.get?.(iframe.id); if (candidate?.getIframe?.() === iframe) sdk = candidate; } catch { /* Standalone iframe. */ }
+    this.channelId = sdk && ['number', 'string'].includes(typeof sdk.id) ? sdk.id : `ryb-${Math.random().toString(36).slice(2)}`;
     this.message = (event) => {
       if (this.destroyed || event.source !== iframe.contentWindow || event.origin !== this.origin) return;
       let data;
@@ -86,8 +90,8 @@ export class YouTubeClock {
   setStatus(value) { if (this.status !== value) { this.status = value; this.onState(value); } }
   post(data) { if (!this.destroyed) this.iframe.contentWindow?.postMessage(JSON.stringify(data), this.origin); }
   command(func, args = []) { this.post({ event: 'command', func, args }); }
-  setNativeTranslation(source, target) {
-    this.nativeTrack = nativeCaptionTrack(source, target);
+  setNativeTranslation(source, target, details) {
+    this.nativeTrack = nativeCaptionTrack(source, target, details);
     this.nativeAttempts = 0; this.nativeLastAttempt = -Infinity; this.nativePlaySeen = this.state === 1;
     this.applyNativeTranslation();
   }
