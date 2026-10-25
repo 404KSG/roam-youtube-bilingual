@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { nativeCcState, createCaptionReader, createPeerVerifier } from '../server/caption-reader.mjs';
+import { nativeCcState, inspectNativeCc, createCaptionReader, createPeerVerifier } from '../server/caption-reader.mjs';
 import { sanitizeVideoInfo } from '../server/video-info.mjs';
 const frame = { x: 100, y: 100, width: 800, height: 450 };
 const node = (id, parent, role, text, box) => ({ element_index: id, parent_index: parent, role, label: text, value: text, frame: box });
@@ -25,6 +25,13 @@ test('a Roam checkbox overlapping the video cannot falsely confirm native CC off
   const snapshot = fixture('Subtitles/CC turned on');
   snapshot.elements.unshift(node(99, 1, 'AXCheckBox', 'Subtitles/CC turned off', { x: 820, y: 500, w: 30, h: 30 }));
   assert.equal(nativeCcState(snapshot, { title: 'Test video', frame }), 'on');
+});
+test('hidden controls and a missing player are distinct; native caption nodes prove on', () => {
+  const snapshot = fixture(); snapshot.elements = snapshot.elements.filter(entry => entry.element_index !== 3);
+  assert.deepEqual(inspectNativeCc(snapshot, { title: 'Test video', frame }), { state: 'unknown', reason: 'controls-hidden' });
+  assert.deepEqual(inspectNativeCc(snapshot, { title: 'Other video', frame }), { state: 'unknown', reason: 'player-not-visible' });
+  snapshot.elements.push(node(7, 2, 'AXStaticText', 'Native caption content', { x: 350, y: 480, w: 300, h: 24 }));
+  assert.deepEqual(inspectNativeCc(snapshot, { title: 'Test video', frame }), { state: 'on', reason: 'native-caption-visible' });
 });
 test('video metadata uses the supplied language list and removes raw URLs', () => {
   const info = sanitizeVideoInfo({ id: 'vif8NQcjVf0', title: 'Test video', subtitles: { en: [{ ext: 'json3', name: 'English', url: 'https://www.youtube.com/api/timedtext?lang=en' }] }, automatic_captions: { ja: [{ name: 'Japanese', url: 'https://www.youtube.com/?secret=not-returned' }], 'zh-Hans': [{ name: 'Chinese (Simplified)' }], 'en-orig': [{}], bad: [] } }, 'vif8NQcjVf0');
@@ -64,7 +71,7 @@ test('read bridge uses only permitted read-only tools and returns only CC state'
   };
   const reader = createCaptionReader({ platform: 'darwin', exec, now: () => 1000 });
   const result = await reader.read({ title: 'Test video', frame });
-  assert.deepEqual(result, { state: 'off' });
+  assert.deepEqual(result, { state: 'off', reason: 'control' });
   assert.ok(calls.every((args) => args[0] === 'permissions' || ['get_recording_state', 'list_apps', 'list_windows', 'get_window_state'].includes(args[1])));
 });
 test('recording never triggers a state read or permission change', async () => {

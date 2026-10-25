@@ -102,12 +102,26 @@ export class YouTubeClock {
   setStatus(value) { if (this.status !== value) { this.status = value; this.onState(value); } }
   post(data) { if (!this.destroyed) this.iframe.contentWindow?.postMessage(JSON.stringify(data), this.origin); }
   command(func, args = []) { this.post({ event: 'command', func, args }); }
-  unloadCaptions() {
-    // This only requests closure. The overlay stays hidden until the separate
-    // read-only native-state bridge confirms that CC is actually off.
-    this.command('unloadModule', ['captions']);
+  wakeCaptionControls() {
+    if (this.destroyed || this.now() - (this.lastControlWake ?? -Infinity) < 1800) return;
+    this.lastControlWake = this.now();
+    try { if (this.sdk?.getIframe?.() === this.iframe && typeof this.sdk.wakeUpControls === 'function') this.sdk.wakeUpControls(); } catch { /* Verification stays closed. */ }
   }
-  restoreCaptions() { this.command('loadModule', ['captions']); }
+  unloadCaptions() {
+    // Requests are not acknowledgments. Use the existing SDK's supported
+    // command path, then obtain the scoped read-only CC confirmation.
+    try {
+      if (this.sdk?.getIframe?.() === this.iframe && typeof this.sdk.unloadModule === 'function') this.sdk.unloadModule('captions');
+      else this.command('unloadModule', ['captions']);
+    } catch { this.command('unloadModule', ['captions']); }
+    this.wakeCaptionControls();
+  }
+  restoreCaptions() {
+    try {
+      if (this.sdk?.getIframe?.() === this.iframe && typeof this.sdk.loadModule === 'function') this.sdk.loadModule('captions');
+      else this.command('loadModule', ['captions']);
+    } catch { this.command('loadModule', ['captions']); }
+  }
   isSynchronized() {
     // Paused/ended/cued players need not emit periodic time packets.
     return !this.destroyed && this.hasTime && (this.state !== 1 || this.now() - this.lastTimeMessage < 5000);

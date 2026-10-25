@@ -19,17 +19,17 @@ export async function runUnifiedAcceptance(options = {}) {
   const originalFetch = window.fetch;
   const source = 'This English sentence\nwas previously wrapped onto two lines.';
   const targets = { 'zh-Hans': ['第一行中文', '第二行中文'], ja: ['日本語の字幕を', '一行にまとめます。'], fr: ['Une ligne française', 'sans retour à la ligne.'] };
-  let ccState = 'off', releaseLate, hold = false;
+  let ccState = 'off', ccReason = 'control', releaseLate, hold = false;
   sessionStorage.setItem('roam-youtube-bilingual/session/v1', JSON.stringify({ target: 'zh-Hans', fontSize: 20 }));
   window.fetch = async (url, options = {}) => {
     const path = new URL(url).pathname; const body = options.body ? JSON.parse(options.body) : {};
     calls.push({ path, body });
     let data;
-    if (path.endsWith('/health')) data = { ok: true, service: 'roam-youtube-bilingual', apiVersion: 4, provider: 'youtube-unified' };
+    if (path.endsWith('/health')) data = { ok: true, service: 'roam-youtube-bilingual', apiVersion: 5, provider: 'youtube-unified' };
     else if (path.endsWith('/video-info')) data = { videoId: body.videoId, title: 'Fixture video', sourceLanguage: 'en', languages: [{ code: 'en', name: 'English' }, { code: 'zh-Hans', name: 'Chinese' }, { code: 'ja', name: 'Japanese' }, { code: 'fr', name: 'French' }] };
     else if (path.endsWith('/captions')) data = { videoId: body.videoId, language: body.target, cues: [{ id: 0, start: 0, end: 100, text: body.target === 'en' ? source : (targets[body.target] || targets['zh-Hans']).join('') }] };
     else if (path.endsWith('/native-cc-state')) {
-      data = { videoId: body.videoId, state: ccState };
+      data = { videoId: body.videoId, state: ccState, reason: ccReason };
       if (hold) return new Promise((resolve) => { releaseLate = () => resolve(new Response(JSON.stringify({ ...data, state: 'off' }))); });
     } else throw new Error('Unexpected endpoint: ' + path);
     return new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } });
@@ -85,6 +85,13 @@ export async function runUnifiedAcceptance(options = {}) {
     assert(Number(box.dataset.fontSize) <= 14 && Number(box.dataset.fontSize) > 0, 'font size applies to both rows');
     assert(calls.filter((call) => call.path.endsWith('/captions')).length === 3, 'target changes reuse English but download a separate target track');
     assert(calls.filter((call) => call.path.endsWith('/captions')).some((call) => call.body.target === 'ja'), 'Japanese selection requests the actual Japanese track');
+    ccState = 'unknown'; ccReason = 'controls-hidden';
+    const checksBeforeHide = calls.filter(call => call.path.endsWith('native-cc-state')).length;
+    await wait(() => calls.filter(call => call.path.endsWith('native-cc-state')).length >= checksBeforeHide + 3);
+    assert(!box.hidden, 'verified off state survives hidden player controls while scope stays visible');
+    ccReason = 'player-not-visible'; await wait(() => box.hidden);
+    assert(box.hidden, 'missing player still closes the display gate');
+    ccState = 'off'; ccReason = 'control'; await wait(() => !box.hidden);
     ccState = 'on'; await wait(() => box.hidden);
     assert(box.hidden, 'CC on immediately closes the render gate');
     ccState = 'off'; await wait(() => !box.hidden);

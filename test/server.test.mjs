@@ -13,7 +13,7 @@ const post = (body, origin = 'https://roamresearch.com') => ({ method: 'POST', h
 const frame = { x: 100, y: 100, width: 800, height: 450 };
 test('health describes compact bridge without models, tokens or API configuration', async (t) => {
   const base = await fixture(t); const data = await (await fetch(base + '/v1/youtube/health')).json();
-  assert.equal(data.provider, 'youtube-unified'); assert.equal(data.apiVersion, 4);
+  assert.equal(data.provider, 'youtube-unified'); assert.equal(data.apiVersion, 5);
   assert.equal('apiConfigured' in data, false); assert.equal('token' in data, false);
 });
 test('captions require a video-supported target and cache actual tracks by video and language', async (t) => {

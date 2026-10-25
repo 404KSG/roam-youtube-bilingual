@@ -1,0 +1,16 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { resolveNativeCc } from '../src/native-cc.mjs';
+
+test('hidden controls preserve an explicit off confirmation but never create one', () => {
+  assert.equal(resolveNativeCc('off', { state: 'unknown', reason: 'controls-hidden' }), 'off');
+  assert.equal(resolveNativeCc('unknown', { state: 'unknown', reason: 'controls-hidden' }), 'unknown');
+  assert.equal(resolveNativeCc('on', { state: 'unknown', reason: 'controls-hidden' }), 'unknown');
+});
+test('positive native captions, missing players, and unknown responses close the gate', () => {
+  assert.equal(resolveNativeCc('off', { state: 'on', reason: 'native-caption-visible' }), 'on');
+  assert.equal(resolveNativeCc('off', { state: 'unknown', reason: 'player-not-visible' }), 'unknown');
+  assert.equal(resolveNativeCc('off', { state: 'unknown', reason: 'unrecognized-control' }), 'unknown');
+  assert.equal(resolveNativeCc('off', { state: 'unknown', reason: 'busy' }), 'unknown');
+  assert.equal(resolveNativeCc('off', undefined), 'unknown');
+});

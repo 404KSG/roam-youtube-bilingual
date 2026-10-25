@@ -2,6 +2,7 @@ import { videoIdFromUrl, normalizeCues, activeCueIndex } from './core.mjs';
 import { YouTubeClock } from './clock.mjs';
 import { VideoSurface } from './surface.mjs';
 import { claimRenderer, releaseRenderer } from './lifecycle.mjs';
+import { resolveNativeCc } from './native-cc.mjs';
 import { VERSION, SERVICE_URL, DEFAULT_CONFIG, validateConfig, verifyHealth, singleLine, fittedFontSize } from './protocol.mjs';
 
 const STORAGE_KEY = 'roam-youtube-bilingual/session/v1';
@@ -260,14 +261,14 @@ class VideoCaptions {
       if (this.disposed || epoch !== this.epoch || abort.signal.aborted || data.videoId !== videoId) return;
       const currentFrame = this.screenFrame();
       if (Date.now() - before > 1200 || ['x', 'y', 'width', 'height'].some(key => Math.abs(frame[key] - currentFrame[key]) > 4)) { this.closeNativeGate(); return; }
-      this.ccState = data.state === 'off' ? 'off' : data.state === 'on' ? 'on' : 'unknown';
+      this.ccState = resolveNativeCc(this.ccState, data);
       this.nextCcCheck = Date.now() + 700;
       if (this.ccState !== 'off') {
         this.clearPair();
         if (this.ccState === 'on') {
           this.nativeWasOn ??= true; this.nativeChanged = true;
           this.clock?.unloadCaptions(); this.notice('Native captions are still on. Bilingual subtitles remain hidden.');
-        }
+        } else if (data.reason === 'controls-hidden') this.clock?.wakeCaptionControls();
         return;
       }
       this.nativeWasOn ??= false; this.ccVerifiedAt = before;

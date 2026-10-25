@@ -17,12 +17,12 @@ function normalizedTitle(value) { return String(value || '').normalize('NFKC').r
 
 // A missing checkbox is unknown, not off: the player can temporarily omit its
 // controls while loading. Only YouTube's explicit AX label opens the renderer.
-export function nativeCcState(snapshot, { title, frame }) {
-  if (!validRect(frame) || !Array.isArray(snapshot?.elements)) return 'unknown';
+export function inspectNativeCc(snapshot, { title, frame }) {
+  if (!validRect(frame) || !Array.isArray(snapshot?.elements)) return { state: 'unknown', reason: 'player-not-visible' };
   const elements = snapshot.elements;
   const player = elements.filter((entry) => entry.role === 'AXWebArea' && /YouTube\s*$/i.test(entry.label || '') && normalizedTitle(entry.label) === normalizedTitle(title) && validRect(rectOf(entry.frame)))
     .map((entry) => ({ entry, score: overlap(frame, rectOf(entry.frame)) })).filter((candidate) => candidate.score > 0.72).sort((a, b) => b.score - a.score)[0]?.entry;
-  if (!player) return 'unknown';
+  if (!player) return { state: 'unknown', reason: 'player-not-visible' };
   const playerRect = rectOf(player.frame), byIndex = new Map(elements.map(entry => [entry.element_index, entry]));
   const belongsToPlayer = (entry) => {
     const visited = new Set();
@@ -36,12 +36,29 @@ export function nativeCcState(snapshot, { title, frame }) {
     const rect = rectOf(entry.frame), cx = rect && rect.x + rect.width / 2, cy = rect && rect.y + rect.height / 2;
     return entry.role === 'AXCheckBox' && belongsToPlayer(entry) && rect && rect.width > 0 && rect.height > 0 && Number.isFinite(cx) && Number.isFinite(cy) && cx >= playerRect.x && cx <= playerRect.x + playerRect.width && cy >= playerRect.y && cy <= playerRect.y + playerRect.height;
   });
-  if (!checkbox) return 'unknown';
-  const label = String(checkbox.label || checkbox.value || '').trim();
-  if (label === 'Subtitles/CC turned on') return 'on';
-  if (label === 'Subtitles/CC turned off') return 'off';
-  return 'unknown';
+  if (checkbox) {
+    const label = String(checkbox.label || checkbox.value || '').trim();
+    if (label === 'Subtitles/CC turned on') return { state: 'on', reason: 'control' };
+    if (label === 'Subtitles/CC turned off') return { state: 'off', reason: 'control' };
+    return { state: 'unknown', reason: 'unrecognized-control' };
+  }
+  // Presence only: never read, return, or persist these nodes' text. A native
+  // caption appearing inside the exact player is a reason to hide our layer.
+  const interactive = new Set(['AXButton', 'AXLink', 'AXMenuItem', 'AXSlider', 'AXCheckBox', 'AXPopUpButton', 'AXTextField', 'AXTextArea', 'AXHeading']);
+  const nativeCaptionVisible = elements.some(entry => {
+    if (entry.role !== 'AXStaticText' || !belongsToPlayer(entry)) return false;
+    const r = rectOf(entry.frame);
+    if (!r || r.width < 15 || r.height < 7 || r.height > playerRect.height * .25 || r.y < playerRect.y + playerRect.height * .52 || r.y + r.height > playerRect.y + playerRect.height * 1.02 || Math.abs(r.x + r.width / 2 - playerRect.x - playerRect.width / 2) > playerRect.width * .25) return false;
+    let parent = byIndex.get(entry.parent_index); const visited = new Set();
+    while (parent && parent.element_index !== player.element_index && !visited.has(parent.element_index)) {
+      if (interactive.has(parent.role)) return false;
+      visited.add(parent.element_index); parent = byIndex.get(parent.parent_index);
+    }
+    return true;
+  });
+  return nativeCaptionVisible ? { state: 'on', reason: 'native-caption-visible' } : { state: 'unknown', reason: 'controls-hidden' };
 }
+export function nativeCcState(snapshot, scope) { return inspectNativeCc(snapshot, scope).state; }
 
 // The native-state route is restricted to the same logged-in OS user. It does
 // not return captions, screenshots, AX trees, or arbitrary accessibility data.
@@ -95,10 +112,15 @@ export function createCaptionReader({ exec = execute, platform = process.platfor
         const windows = discovery.windows.filter((window) => {
           const b = window.bounds, cx = frame.x + frame.width / 2, cy = frame.y + frame.height / 2;
           return cx >= b.x && cx <= b.x + b.width && cy >= b.y && cy <= b.y + b.height;
-        }).sort((a, b) => b.z_index - a.z_index);
+        }).sort((a, b) => a.z_index - b.z_index);
         if (!windows.length) { discovery = null; return { state: 'unknown', reason: 'window-not-visible' }; }
-        const snapshot = await cli('get_window_state', { pid: discovery.pid, window_id: windows[0].window_id, include_screenshot: false, max_depth: 4, max_elements: 600 }, signal);
-        return { state: nativeCcState(snapshot, { title, frame }) };
+        for (const window of windows.slice(0, 3)) {
+          const snapshot = await cli('get_window_state', { pid: discovery.pid, window_id: window.window_id, include_screenshot: false, max_depth: 4, max_elements: 600 }, signal);
+          const result = inspectNativeCc(snapshot, { title, frame });
+          if (result.reason !== 'player-not-visible') return result;
+        }
+        discovery = null;
+        return { state: 'unknown', reason: 'player-not-visible' };
       } catch (error) {
         if (error.name === 'AbortError') throw error;
         discovery = null;
