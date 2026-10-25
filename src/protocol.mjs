@@ -1,6 +1,6 @@
-export const VERSION = '0.5.0-beta.6';
+export const VERSION = '0.5.0-beta.7';
 export const SERVICE_ID = 'roam-youtube-bilingual';
-export const API_VERSION = 5;
+export const API_VERSION = 6;
 export const SERVICE_URL = 'http://127.0.0.1:17321';
 export const DEFAULT_CONFIG = { target: 'zh-Hans', fontSize: 20 };
 export function youtubeLanguage(code) {

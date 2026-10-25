@@ -56,11 +56,12 @@ test('peer check authenticates the client UID, not the server side of a socket',
   const wrong = createPeerVerifier({ platform: 'darwin', uid: 501, exec: async () => ({ stdout: 'p10\nu502\nn127.0.0.1:50001->127.0.0.1:17321\np20\nu501\nn127.0.0.1:17321->127.0.0.1:50001\n' }) });
   await assert.rejects(wrong(socket, 17321), (error) => error.status === 403);
 });
-test('read bridge uses only permitted read-only tools and returns only CC state', async () => {
-  const calls = [];
+test('read bridge reuses the verified Roam process and timestamps the actual snapshot', async () => {
+  const calls = []; let now = 1000;
   const exec = async (_path, args, options) => {
     calls.push(args); assert.equal(options.env?.OPENAI_API_KEY, undefined);
     let result;
+    if (_path === '/bin/ps') return { stdout: '/Applications/Roam Research.app/Contents/MacOS/Roam Research' };
     if (args[0] === 'permissions') result = { accessibility: true, source: { attribution: 'driver-daemon' } };
     else if (args[1] === 'get_recording_state') result = { enabled: false, recording: false };
     else if (args[1] === 'list_apps') result = { apps: [{ bundle_id: 'com.roam-research.desktop-app', pid: 23, running: true }] };
@@ -69,10 +70,14 @@ test('read bridge uses only permitted read-only tools and returns only CC state'
     else throw new Error('Unexpected command');
     return { stdout: JSON.stringify(result) };
   };
-  const reader = createCaptionReader({ platform: 'darwin', exec, now: () => 1000 });
+  const reader = createCaptionReader({ platform: 'darwin', exec, now: () => now });
   const result = await reader.read({ title: 'Test video', frame });
-  assert.deepEqual(result, { state: 'off', reason: 'control' });
-  assert.ok(calls.every((args) => args[0] === 'permissions' || ['get_recording_state', 'list_apps', 'list_windows', 'get_window_state'].includes(args[1])));
+  assert.deepEqual(result, { state: 'off', reason: 'control', checkedAt: 1000 });
+  now = 7000;
+  assert.equal((await reader.read({ title: 'Test video', frame })).checkedAt, 7000);
+  assert.equal(calls.filter(args => args[1] === 'list_apps').length, 1);
+  assert.equal(calls.filter(args => args[1] === 'list_windows').length, 2);
+  assert.ok(calls.every((args) => args[0] === 'permissions' || args[0] === '-ww' || ['get_recording_state', 'list_apps', 'list_windows', 'get_window_state'].includes(args[1])));
 });
 test('recording never triggers a state read or permission change', async () => {
   const calls = [];

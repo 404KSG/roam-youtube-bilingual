@@ -13,7 +13,7 @@ const post = (body, origin = 'https://roamresearch.com') => ({ method: 'POST', h
 const frame = { x: 100, y: 100, width: 800, height: 450 };
 test('health describes compact bridge without models, tokens or API configuration', async (t) => {
   const base = await fixture(t); const data = await (await fetch(base + '/v1/youtube/health')).json();
-  assert.equal(data.provider, 'youtube-unified'); assert.equal(data.apiVersion, 5);
+  assert.equal(data.provider, 'youtube-unified'); assert.equal(data.apiVersion, 6);
   assert.equal('apiConfigured' in data, false); assert.equal('token' in data, false);
 });
 test('captions require a video-supported target and cache actual tracks by video and language', async (t) => {
@@ -103,7 +103,7 @@ test('native CC state requires same-user verification and only reports an explic
   let verified = false, read = false;
   const base = await fixture(t, { verifyPeer: async (socket) => { assert.ok(socket.remotePort); verified = true; }, nativeCcReader: { read: async ({ title, frame: actualFrame }) => { assert.equal(verified, true); read = true; assert.equal(title, info.title); assert.deepEqual(actualFrame, frame); return { state: 'off' }; } } });
   const data = await (await fetch(base + '/v1/youtube/native-cc-state', post({ videoId: id, frame }))).json();
-  assert.deepEqual(data, { videoId: id, state: 'off' }); assert.equal(read, true);
+  assert.equal(data.videoId, id); assert.equal(data.state, 'off'); assert.ok(Number.isFinite(data.checkedAt)); assert.equal(read, true);
   assert.equal((await fetch(base + '/v1/youtube/native-cc-state', post({ videoId: id, frame, pid: 1 }))).status, 400);
 });
 test('untrusted peers and origins cannot read any accessibility data', async (t) => {

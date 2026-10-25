@@ -1,6 +1,6 @@
 # Roam 紧凑双语字幕
 
-> **0.5.0-beta.6 — Draft 预览版。** 保留已验证的真实英文、中文、日文字幕获取、英文界面和 Blueprint 图标；本次修复播放控件自动隐藏后的字幕状态连续性。73 项 Node 测试通过；真实播放仍需现场验收，不把下载成功或模拟检查当成完整播放验收。
+> **0.5.0-beta.7 — Draft 预览版。** 保留真实英文、中文、日文字幕获取、英文界面和 Blueprint 图标。本版按实际画面检查时间判断状态新鲜度，并复用已验证的 Roam 进程，避免耗时的应用扫描让字幕确认反复失效。75 项 Node 测试通过；真实播放单独验收。
 
 ## 这版的界面
 
@@ -46,7 +46,7 @@ FluentRead 的 MAIN-world 请求旁路和原生字幕 DOM 隐藏依赖浏览器�
 
 ## Draft 试用
 
-1. 使用本版源码运行 `start.command`，或在项目目录执行 `npm start`。升级时须先停止旧服务，再启动新版；本版使用服务 API v5。不用配置任何 AI API。
+1. 使用本版源码运行 `start.command`，或在项目目录执行 `npm start`。升级时须先停止旧服务，再启动新版；本版使用服务 API v6。不用配置任何 AI API。
 2. 在 Roam Depot 中重新加载原 shorthand 的扩展，使用视频下方工具栏里的双语图标。
 3. 打开 **Enable bilingual subtitles**，选择 **Translation language**，调整 **Font size**，点 **Done**。首次自动译文下载约需一分钟；不要在准备过程中反复关闭和重开。
 

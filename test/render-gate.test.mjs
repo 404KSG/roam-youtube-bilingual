@@ -4,13 +4,14 @@ import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { activeCueIndex } from '../src/core.mjs';
 import { singleLine } from '../src/protocol.mjs';
+import { resolveNativeCc } from '../src/native-cc.mjs';
 
 // Exercise the real controller methods without constructing browser DOM.
 const source = await readFile(new URL('../src/extension.mjs', import.meta.url), 'utf8');
 const controller = source.slice(source.indexOf('class VideoCaptions {'), source.indexOf('\nfunction scan()'));
-function harness({ request = async () => ({ ok: true }) } = {}) {
+function harness({ request = async () => ({ ok: true }), now = Date.now } = {}) {
   const commands = [], videos = new Map();
-  const context = { videos, config: { target: 'zh-Hans' }, AbortController, DOMException, clearTimeout, activeCueIndex, singleLine,
+  const context = { videos, config: { target: 'zh-Hans' }, AbortController, DOMException, clearTimeout, activeCueIndex, singleLine, resolveNativeCc, Date: { now }, settings: null, document: { hidden: false },
     verifyHealth: data => data, request };
   const Controller = vm.runInNewContext(`${controller}; VideoCaptions`, context);
   const video = Object.create(Controller.prototype);
@@ -96,6 +97,21 @@ test('a video switch starts fresh metadata and discards the previous late respon
     await Promise.allSettled([old, current]);
   }
   assert.equal(video.info.videoId, 'dQw4w9WgXcQ');
+});
+
+test('slow process discovery does not invalidate a freshly captured native state', async () => {
+  let time = 1000, refreshed = false;
+  const { video } = harness({ now: () => time, request: async () => { time = 2900; return { videoId: 'vif8NQcjVf0', state: 'off', reason: 'control', checkedAt: 2850 }; } });
+  Object.assign(video, { enabled: true, surface: { host: { style: { display: 'block' } } }, screenFrame: () => ({ x: 0, y: 0, width: 800, height: 450 }), updatePair: () => { refreshed = true; } });
+  await video.checkNativeCc();
+  assert.equal(video.ccState, 'off'); assert.equal(video.ccVerifiedAt, 2850); assert.equal(refreshed, true);
+});
+
+test('an old snapshot is still rejected even if its response has just arrived', async () => {
+  let time = 1000;
+  const { video } = harness({ now: () => time, request: async () => { time = 2900; return { videoId: 'vif8NQcjVf0', state: 'off', reason: 'control', checkedAt: 1000 }; } });
+  Object.assign(video, { enabled: true, surface: { host: { style: { display: 'block' } } }, screenFrame: () => ({ x: 0, y: 0, width: 800, height: 450 }) });
+  await video.checkNativeCc(); assert.equal(video.ccState, 'unknown'); assert.equal(video.box.hidden, true);
 });
 
 test('an expired CC-off confirmation cannot keep the overlay visible', () => {

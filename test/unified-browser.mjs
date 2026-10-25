@@ -25,11 +25,11 @@ export async function runUnifiedAcceptance(options = {}) {
     const path = new URL(url).pathname; const body = options.body ? JSON.parse(options.body) : {};
     calls.push({ path, body });
     let data;
-    if (path.endsWith('/health')) data = { ok: true, service: 'roam-youtube-bilingual', apiVersion: 5, provider: 'youtube-unified' };
+    if (path.endsWith('/health')) data = { ok: true, service: 'roam-youtube-bilingual', apiVersion: 6, provider: 'youtube-unified' };
     else if (path.endsWith('/video-info')) data = { videoId: body.videoId, title: 'Fixture video', sourceLanguage: 'en', languages: [{ code: 'en', name: 'English' }, { code: 'zh-Hans', name: 'Chinese' }, { code: 'ja', name: 'Japanese' }, { code: 'fr', name: 'French' }] };
     else if (path.endsWith('/captions')) data = { videoId: body.videoId, language: body.target, cues: [{ id: 0, start: 0, end: 100, text: body.target === 'en' ? source : (targets[body.target] || targets['zh-Hans']).join('') }] };
     else if (path.endsWith('/native-cc-state')) {
-      data = { videoId: body.videoId, state: ccState, reason: ccReason };
+      data = { videoId: body.videoId, state: ccState, reason: ccReason, checkedAt: Date.now() };
       if (hold) return new Promise((resolve) => { releaseLate = () => resolve(new Response(JSON.stringify({ ...data, state: 'off' }))); });
     } else throw new Error('Unexpected endpoint: ' + path);
     return new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } });

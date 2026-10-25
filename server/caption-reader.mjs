@@ -85,7 +85,7 @@ export function createPeerVerifier({ exec = execute, uid = process.getuid?.(), p
 }
 
 export function createCaptionReader({ exec = execute, platform = process.platform, now = Date.now } = {}) {
-  let discovery, discoveredAt = 0, busy = false;
+  let discovery, discoveredAt = 0, busy = false, roamPid;
   const cli = async (tool, args, signal) => {
     const { stdout } = await exec(process.env.CUA_DRIVER_PATH || 'cua-driver', ['call', tool, JSON.stringify(args)], { timeout: 2500, maxBuffer: 1024 * 1024, signal, env: localEnv() });
     return JSON.parse(stdout);
@@ -102,11 +102,18 @@ export function createCaptionReader({ exec = execute, platform = process.platfor
           const { stdout } = await exec(process.env.CUA_DRIVER_PATH || 'cua-driver', ['permissions', 'status', '--json'], { timeout: 2000, maxBuffer: 65536, signal, env: localEnv() });
           const permissions = JSON.parse(stdout);
           if (permissions.accessibility !== true || permissions.source?.attribution !== 'driver-daemon') throw new Error('The accessibility helper is not ready. Permissions will not be changed automatically.');
-          const apps = await cli('list_apps', {}, signal);
-          const app = apps.apps?.find((item) => item.bundle_id === ROAM_BUNDLE && item.running && Number.isInteger(item.pid) && item.pid > 0);
-          if (!app) throw new Error('Open the video in the Roam Research desktop app.');
-          const windows = await cli('list_windows', { pid: app.pid }, signal);
-          discovery = { pid: app.pid, windows: windows.windows.filter((window) => window.is_on_screen && window.bounds.width > 200 && window.bounds.height > 150).map(({ window_id, bounds, z_index }) => ({ window_id, bounds, z_index })) };
+          if (roamPid) {
+            const processInfo = await exec('/bin/ps', ['-ww', '-p', String(roamPid), '-o', 'comm='], { timeout: 1000, maxBuffer: 8192, signal, env: localEnv() });
+            if (!processInfo.stdout.trim().includes('/Roam Research.app/Contents/')) roamPid = undefined;
+          }
+          if (!roamPid) {
+            const apps = await cli('list_apps', {}, signal);
+            const app = apps.apps?.find((item) => item.bundle_id === ROAM_BUNDLE && item.running && Number.isInteger(item.pid) && item.pid > 0);
+            if (!app) throw new Error('Open the video in the Roam Research desktop app.');
+            roamPid = app.pid;
+          }
+          const windows = await cli('list_windows', { pid: roamPid }, signal);
+          discovery = { pid: roamPid, windows: windows.windows.filter((window) => window.is_on_screen && window.bounds.width > 200 && window.bounds.height > 150).map(({ window_id, bounds, z_index }) => ({ window_id, bounds, z_index })) };
           discoveredAt = now();
         }
         const windows = discovery.windows.filter((window) => {
@@ -115,15 +122,17 @@ export function createCaptionReader({ exec = execute, platform = process.platfor
         }).sort((a, b) => a.z_index - b.z_index);
         if (!windows.length) { discovery = null; return { state: 'unknown', reason: 'window-not-visible' }; }
         for (const window of windows.slice(0, 3)) {
+          const beforeSnapshot = now();
           const snapshot = await cli('get_window_state', { pid: discovery.pid, window_id: window.window_id, include_screenshot: false, max_depth: 4, max_elements: 600 }, signal);
+          const checkedAt = Math.round((beforeSnapshot + now()) / 2);
           const result = inspectNativeCc(snapshot, { title, frame });
-          if (result.reason !== 'player-not-visible') return result;
+          if (result.reason !== 'player-not-visible') return { ...result, checkedAt };
         }
         discovery = null;
         return { state: 'unknown', reason: 'player-not-visible' };
       } catch (error) {
         if (error.name === 'AbortError') throw error;
-        discovery = null;
+        discovery = null; roamPid = undefined;
         const safe = ['Native caption checks', 'The accessibility helper', 'Open the video in'];
         throw new Error(safe.some((prefix) => error.message?.startsWith(prefix)) ? error.message : 'Native caption state is unavailable. Keep the Roam desktop window visible and check the local read-only helper.');
       } finally { busy = false; }

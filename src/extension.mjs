@@ -264,7 +264,8 @@ class VideoCaptions {
       const data = await request('/v1/youtube/native-cc-state', { videoId, frame }, abort.signal, this.ccState);
       if (this.disposed || epoch !== this.epoch || abort.signal.aborted || data.videoId !== videoId) return;
       const currentFrame = this.screenFrame();
-      if (Date.now() - before > 1200 || ['x', 'y', 'width', 'height'].some(key => Math.abs(frame[key] - currentFrame[key]) > 4)) { this.closeNativeGate(); return; }
+      if (['x', 'y', 'width', 'height'].some(key => Math.abs(frame[key] - currentFrame[key]) > 4)) { this.nextCcCheck = 0; return; }
+      if (!Number.isFinite(data.checkedAt) || data.checkedAt < before - 100 || data.checkedAt > Date.now() + 100 || Date.now() - data.checkedAt > 1500) { this.closeNativeGate(); return; }
       this.ccState = resolveNativeCc(this.ccState, data);
       this.nextCcCheck = Date.now() + 700;
       if (this.ccState !== 'off') {
@@ -275,7 +276,7 @@ class VideoCaptions {
         } else if (data.reason === 'controls-hidden') this.clock?.wakeCaptionControls();
         return;
       }
-      this.nativeWasOn ??= false; this.ccVerifiedAt = before;
+      this.nativeWasOn ??= false; this.ccVerifiedAt = data.checkedAt;
       this.noticeBox.hidden = true; this.lastNoticeKey = null; this.lastError = ''; this.updatePair();
     } catch (error) {
       if (error.name !== 'AbortError' && epoch === this.epoch) { this.ccState = 'unknown'; this.clearPair(); this.lastError = error.message; this.notice(error.message); this.nextCcCheck = Date.now() + 2000; }
