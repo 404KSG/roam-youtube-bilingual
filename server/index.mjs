@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { parseEnv } from 'node:util';
@@ -28,7 +29,6 @@ async function readJSON(request) {
 export function makeServer({ port = 17321, captionFetcher, captionBatchFetcher = fetchCaptionTracks, infoFetcher = fetchVideoInfo, nativeCcReader = createCaptionReader(), verifyPeer = createPeerVerifier(), now = Date.now, cooldownMs = 60000, captionCache } = {}) {
   const requests = createRequestPool({ now, cooldownMs });
   const getInfo = (id, signal) => requests.request(`info:${id}`, sharedSignal => infoFetcher(id, sharedSignal), signal);
-  const trackKey = (id, language) => `caption:${id}:${language}`;
   // Original/uploaded captions remain fast. Auto-translated captions need a
   // wait AFTER extraction, not a retry delay that generates a fresh URL.
   // See yt-dlp/yt-dlp#13831, maintainer comment 3712613129.
@@ -41,10 +41,13 @@ export function makeServer({ port = 17321, captionFetcher, captionBatchFetcher =
     return { tracks };
   } : captionBatchFetcher;
   const getCaptions = async (info, target, signal) => {
+    const selectionFor = language => language === info.sourceLanguage ? info.sourceSelection : info.languages.find(item => item.code === language)?.selection;
+    const sourceKey = language => createHash('sha256').update(JSON.stringify([info.sourceLanguage, info.playerSourceLanguage, info.sourceTrack?.kind || '', info.sourceTrack?.name || '', info.sourceTrack?.vss_id || '', selectionFor(language)])).digest('hex');
+    const trackKey = (id, language) => `caption:${id}:${sourceKey(language)}:${language}`;
     const wanted = [...new Set([info.sourceLanguage, target])];
     for (const language of wanted) {
       if (requests.peek(trackKey(info.videoId, language)) !== undefined) continue;
-      const saved = await captionCache?.get(info.videoId, language, signal);
+      const saved = await captionCache?.get(info.videoId, language, signal, sourceKey(language));
       signal?.throwIfAborted();
       if (saved?.length) requests.prime(trackKey(info.videoId, language), saved);
     }
@@ -53,13 +56,13 @@ export function makeServer({ port = 17321, captionFetcher, captionBatchFetcher =
       const needsPreparation = language => language !== info.sourceLanguage && info.languages.some(item => item.code === language && item.autoTranslated === true);
       for (const [languages, waitSeconds] of [[missing.filter(language => !needsPreparation(language)), 0], [missing.filter(needsPreparation), 60]]) {
         if (!languages.length) continue;
-        const result = await readTracks(info.videoId, languages, sharedSignal, { waitSeconds });
+        const result = await readTracks(info.videoId, languages, sharedSignal, { waitSeconds, sourceLanguage: info.sourceLanguage, expectedSourceTrack: info.sourceTrack, selections: Object.fromEntries(languages.map(language => [language, selectionFor(language)])) });
         sharedSignal.throwIfAborted();
         for (const language of languages) {
           const cues = result.tracks?.[language];
           if (Array.isArray(cues) && cues.length) {
             requests.prime(trackKey(info.videoId, language), cues);
-            await captionCache?.put(info.videoId, language, cues, sharedSignal);
+            await captionCache?.put(info.videoId, language, cues, sharedSignal, sourceKey(language));
           }
         }
         if (languages.some(language => requests.peek(trackKey(info.videoId, language)) === undefined)) throw result.error || new Error('YouTube did not provide all requested caption tracks.');
@@ -113,10 +116,10 @@ export function makeServer({ port = 17321, captionFetcher, captionBatchFetcher =
       const target = body.target;
       if (target !== info.sourceLanguage && !info.languages.some((language) => language.code === target)) return json(400, { error: 'This video does not provide the requested caption language.' });
       const cues = await getCaptions(info, target, controller.signal);
-      return json(200, { videoId: body.videoId, language: target, cues });
+      return json(200, { videoId: body.videoId, language: target, sourceLanguage: info.sourceLanguage, captionPolicy: 'same-source-v1', cues });
     } catch (error) {
       if (error.name === 'AbortError') return;
-      const codes = new Set(['YOUTUBE_RATE_LIMITED', 'YOUTUBE_DOWNLOAD_FAILED', 'YOUTUBE_METADATA_FAILED', 'LOCAL_QUEUE_FULL']);
+      const codes = new Set(['YOUTUBE_RATE_LIMITED', 'YOUTUBE_DOWNLOAD_FAILED', 'YOUTUBE_METADATA_FAILED', 'SOURCE_TRACK_UNAVAILABLE', 'LOCAL_QUEUE_FULL']);
       const code = codes.has(error.code) ? error.code : error.name === 'TimeoutError' ? 'REQUEST_TIMEOUT' : 'SUBTITLE_REQUEST_FAILED';
       const retryAfterSeconds = code === 'YOUTUBE_RATE_LIMITED' && Number.isFinite(error.retryAfterSeconds) ? Math.max(1, Math.min(3600, Math.ceil(error.retryAfterSeconds))) : undefined;
       if (retryAfterSeconds) res.setHeader('Retry-After', String(retryAfterSeconds));
@@ -135,7 +138,7 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
   }
   const port = Number(process.env.PORT || 17321);
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('PORT must be between 1024 and 65535.');
-  const server = makeServer({ port, captionCache: createCaptionCache(resolve(root, '.cache', 'captions')) });
+  const server = makeServer({ port, captionCache: createCaptionCache(resolve(root, '.cache', 'captions-v2')) });
   server.on('error', (error) => { console.error(error.code === 'EADDRINUSE' ? `Port ${port} is already in use.` : 'The subtitle helper could not start.'); process.exitCode = 1; });
   server.listen(port, '127.0.0.1', () => console.log(`Roam Bilingual Subtitles ${VERSION}\nhttp://127.0.0.1:${port}\nYouTube captions only. No AI API credentials required.\nThe read-only helper checks native CC state only. No caption-text extraction, screenshots, saved accessibility trees, or permission changes.\nPress Ctrl+C to stop.`));
 }

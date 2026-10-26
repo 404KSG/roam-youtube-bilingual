@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 const source = await readFile(new URL('../src/extension.mjs', import.meta.url), 'utf8');
-const code = source.slice(source.indexOf('async function request('), source.indexOf('\nfunction languageName'));
+const code = source.slice(source.indexOf('async function request('), source.indexOf('\nfunction closeSettings'));
 const makeRequest = fetch => vm.runInNewContext(`${code}; request`, { fetch, SERVICE_URL: 'http://127.0.0.1:17321', VERSION: 'test', URL, AbortController, AbortSignal, DOMException, Response });
 
 test('a deadline is reported as timeout, not a disconnected helper', async () => {

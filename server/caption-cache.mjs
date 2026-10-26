@@ -11,25 +11,25 @@ export function createCaptionCache(directory, { now = Date.now, maxAgeMs = 86400
     return join(directory, `${videoId}.${language}.json`);
   };
   return {
-    async get(videoId, language, signal) {
+    async get(videoId, language, signal, sourceKey = '') {
       const path = pathFor(videoId, language);
       try {
         signal?.throwIfAborted();
         const stat = await lstat(path);
         if (!stat.isFile() || stat.size > MAX_SUBTITLE_BYTES) return undefined;
         const data = JSON.parse(await readFile(path, { encoding: 'utf8', signal }));
-        if (data.schema !== 1 || data.source !== 'youtube' || data.videoId !== videoId || data.language !== language || !Number.isFinite(data.savedAt) || data.savedAt > now() + 60000 || now() - data.savedAt > maxAgeMs) return undefined;
+        if (data.schema !== 2 || data.source !== 'youtube-same-source' || data.sourceKey !== sourceKey || data.videoId !== videoId || data.language !== language || !Number.isFinite(data.savedAt) || data.savedAt > now() + 60000 || now() - data.savedAt > maxAgeMs) return undefined;
         const cues = normalizeCues(data.cues);
         return cues.length ? cues : undefined;
       } catch (error) { if (signal?.aborted) throw error; return undefined; }
     },
-    async put(videoId, language, input, signal) {
+    async put(videoId, language, input, signal, sourceKey = '') {
       const path = pathFor(videoId, language), temp = `${path}.${randomUUID()}.tmp`;
       try {
         signal?.throwIfAborted();
         const cues = normalizeCues(input);
-        if (!cues.length) return false;
-        const body = JSON.stringify({ schema: 1, source: 'youtube', videoId, language, savedAt: now(), cues });
+        if (!cues.length || typeof sourceKey !== 'string' || sourceKey.length > 500) return false;
+        const body = JSON.stringify({ schema: 2, source: 'youtube-same-source', sourceKey, videoId, language, savedAt: now(), cues });
         if (Buffer.byteLength(body) > MAX_SUBTITLE_BYTES) return false;
         await mkdir(directory, { recursive: true, mode: 0o700 });
         await writeFile(temp, body, { mode: 0o600, signal });

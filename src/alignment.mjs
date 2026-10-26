@@ -1,9 +1,9 @@
 import { singleLine } from './protocol.mjs';
 
-function joinCaptionFragments(cues, language) {
+export function joinCaptionFragments(cues, language) {
   const compact = /^(zh|ja|ko)(-|$)/i.test(language);
-  return cues.reduce((text, cue) => {
-    const next = singleLine(cue.text);
+  return cues.flatMap(cue => String(cue.text || '').split(/\r?\n/)).reduce((text, part) => {
+    const next = singleLine(part);
     if (!next) return text;
     const space = text && (!compact || (/[A-Za-z0-9]$/.test(text) && /^[A-Za-z0-9]/.test(next))) ? ' ' : '';
     return text + space + next;

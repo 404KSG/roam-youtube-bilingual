@@ -3,52 +3,59 @@ import assert from 'node:assert/strict';
 import { writeFile, access } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fetchCaptionTracks } from '../server/captions.mjs';
-const id = 'vif8NQcjVf0';
+import { fixtureMetadata, fixtureVideoId as id } from './caption-fixtures.mjs';
 const json3 = text => JSON.stringify({ events: [{ tStartMs: 0, dDurationMs: 2000, segs: [{ utf8: text }] }] });
-
-test('English and target tracks share one extraction and retain their own text', async () => {
-  let calls = 0, folder;
-  const result = await fetchCaptionTracks(id, ['en', 'ja'], undefined, { exec: async (_file, args) => {
-    calls++;
-    assert.equal(args[args.indexOf('--sub-langs') + 1], '^(?:en|ja)$');
-    assert.equal(args[args.indexOf('--retries') + 1], '0');
-    folder = dirname(args[args.indexOf('--output') + 1]);
+function cli(download, metadata = fixtureMetadata()) {
+  return async (_file, args, options) => {
+    if (args.includes('--simulate')) return { stdout: JSON.stringify(metadata) };
+    assert.ok(args.includes('--no-simulate')); assert.ok(args.includes('--abort-on-error'));
+    assert.equal(args.includes('--load-info-json'), false, 'keep preparation and download in the native extraction process');
+    const match = new RegExp(args[args.indexOf('--sub-langs') + 1]);
+    const selected = Object.fromEntries(Object.entries({ ...metadata.automatic_captions, ...metadata.subtitles }).filter(([language]) => match.test(language)).map(([language, tracks]) => [language, tracks.find(track => track.ext === 'json3')]));
+    const observed = { id, requested_subtitles: selected }, folder = dirname(args[args.indexOf('--output') + 1]);
+    try { await download({ args, options, selected, observed, folder }); return { stdout: JSON.stringify(observed) }; }
+    catch (error) { error.stdout = JSON.stringify(observed); throw error; }
+  };
+}
+test('a native batch downloads English and the manual-source target while preserving both texts', async () => {
+  let folder;
+  const result = await fetchCaptionTracks(id, ['en', 'ja'], undefined, { exec: cli(async data => {
+    folder = data.folder;
+    const target = new URL(data.selected['ja-en'].url);
+    assert.equal(target.searchParams.get('kind'), null); assert.equal(target.searchParams.get('tlang'), 'ja-en');
     await writeFile(join(folder, `${id}.en.json3`), json3('English'));
-    await writeFile(join(folder, `${id}.ja.json3`), json3('日本語'));
-    return {};
-  } });
-  assert.equal(calls, 1); assert.equal(result.tracks.en[0].text, 'English'); assert.equal(result.tracks.ja[0].text, '日本語');
+    await writeFile(join(folder, `${id}.ja-en.json3`), json3('日本語'));
+  }) });
+  assert.equal(result.tracks.en[0].text, 'English'); assert.equal(result.tracks.ja[0].text, '日本語');
   assert.equal(result.error, undefined); await assert.rejects(access(folder));
 });
-
-test('a target 429 preserves completed English without substituting it as translation', async () => {
-  const result = await fetchCaptionTracks(id, ['en', 'zh-Hans'], undefined, { exec: async (_file, args) => {
-    const folder = dirname(args[args.indexOf('--output') + 1]);
+test('a target 429 preserves verified English without substituting it as translation', async () => {
+  const result = await fetchCaptionTracks(id, ['en', 'zh-Hans'], undefined, { exec: cli(async ({ folder }) => {
     await writeFile(join(folder, `${id}.en.json3`), json3('Original only'));
     throw Object.assign(new Error('failed'), { stderr: 'HTTP Error 429: Too Many Requests' });
-  } });
+  }) });
   assert.equal(result.tracks.en[0].text, 'Original only'); assert.equal(result.tracks['zh-Hans'], undefined);
   assert.equal(result.error.code, 'YOUTUBE_RATE_LIMITED');
 });
-
-test('auto-translated captions wait inside the extractor before download', async () => {
-  const result = await fetchCaptionTracks(id, ['zh-Hans'], undefined, { waitSeconds: 60, exec: async (_file, args, options) => {
-    assert.equal(args[args.indexOf('--sleep-subtitles') + 1], '60');
-    assert.ok(options.timeout > 120000, 'the process deadline must include preparation time');
-    assert.equal(args[args.indexOf('--retries') + 1], '0');
-    const folder = dirname(args[args.indexOf('--output') + 1]);
-    await writeFile(join(folder, `${id}.zh-Hans.json3`), json3('真实下载路径测试'));
-    return {};
-  } });
-  assert.equal(result.error, undefined); assert.ok(result.tracks['zh-Hans']);
+test('prepared translation uses the native source alias and retains the preparation delay', async () => {
+  const result = await fetchCaptionTracks(id, ['zh-Hans'], undefined, { waitSeconds: 60, exec: cli(async ({ args, options, folder, selected }) => {
+    assert.equal(args[args.indexOf('--sleep-subtitles') + 1], '60'); assert.ok(options.timeout > 120000);
+    assert.equal(new URL(selected['zh-Hans-en'].url).searchParams.get('kind'), null);
+    await writeFile(join(folder, `${id}.zh-Hans-en.json3`), json3('同源译文'));
+  }) });
+  assert.equal(result.error, undefined); assert.equal(result.tracks['zh-Hans'][0].text, '同源译文');
 });
-
+test('an actual source mismatch is rejected even when a subtitle file exists', async () => {
+  const result = await fetchCaptionTracks(id, ['zh-Hans'], undefined, { exec: cli(async ({ folder, observed }) => {
+    observed.requested_subtitles['zh-Hans-en'] = { ext: 'json3', url: `https://www.youtube.com/api/timedtext?v=${id}&lang=en&kind=asr&tlang=zh-Hans` };
+    await writeFile(join(folder, `${id}.zh-Hans-en.json3`), json3('Wrong source'));
+  }) });
+  assert.equal(result.tracks['zh-Hans'], undefined); assert.equal(result.error.code, 'SOURCE_TRACK_UNAVAILABLE');
+});
 test('an aborted batch returns no partial result and removes its temporary files', async () => {
   const controller = new AbortController(); let folder;
-  await assert.rejects(fetchCaptionTracks(id, ['en'], controller.signal, { exec: async (_file, args) => {
-    folder = dirname(args[args.indexOf('--output') + 1]);
-    await writeFile(join(folder, `${id}.en.json3`), json3('Old video'));
-    controller.abort(); return {};
-  } }), { name: 'AbortError' });
+  await assert.rejects(fetchCaptionTracks(id, ['en'], controller.signal, { exec: cli(async data => {
+    folder = data.folder; await writeFile(join(folder, `${id}.en.json3`), json3('Old video')); controller.abort();
+  }) }), { name: 'AbortError' });
   await assert.rejects(access(folder));
 });

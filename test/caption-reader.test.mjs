@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { nativeCcState, inspectNativeCc, createCaptionReader, createPeerVerifier } from '../server/caption-reader.mjs';
 import { sanitizeVideoInfo } from '../server/video-info.mjs';
+import { fixtureMetadata } from './caption-fixtures.mjs';
 const frame = { x: 100, y: 100, width: 800, height: 450 };
 const node = (id, parent, role, text, box) => ({ element_index: id, parent_index: parent, role, label: text, value: text, frame: box });
 function fixture(label = 'Subtitles/CC turned off') {
@@ -34,18 +35,18 @@ test('hidden controls and a missing player are distinct; native caption nodes pr
   assert.deepEqual(inspectNativeCc(snapshot, { title: 'Test video', frame }), { state: 'on', reason: 'native-caption-visible' });
 });
 test('video metadata uses the supplied language list and removes raw URLs', () => {
-  const info = sanitizeVideoInfo({ id: 'vif8NQcjVf0', title: 'Test video', subtitles: { en: [{ ext: 'json3', name: 'English', url: 'https://www.youtube.com/api/timedtext?lang=en' }] }, automatic_captions: { ja: [{ name: 'Japanese', url: 'https://www.youtube.com/?secret=not-returned' }], 'zh-Hans': [{ name: 'Chinese (Simplified)' }], 'en-orig': [{}], bad: [] } }, 'vif8NQcjVf0');
+  const raw = fixtureMetadata(); raw.subtitles.en[0].url += '&signature=secret-not-returned';
+  const info = sanitizeVideoInfo(raw, 'vif8NQcjVf0');
   assert.equal(info.sourceLanguage, 'en');
   assert.ok(info.languages.some((item) => item.code === 'ja'));
-  assert.ok(!info.languages.some((item) => item.code.endsWith('-orig')));
+  assert.ok(!info.languages.some((item) => item.code.endsWith('-orig') || item.code.endsWith('-en')));
   assert.equal(JSON.stringify(info).includes('secret'), false);
   assert.throws(() => sanitizeVideoInfo({ id: 'other', title: 'Bad' }, 'vif8NQcjVf0'));
 });
 test('metadata distinguishes prepared auto-translations from uploaded captions', () => {
-  const metadata = sanitizeVideoInfo({ id: 'vif8NQcjVf0', title: 'Video',
-    subtitles: { en: [{ url: 'https://www.youtube.com/api/timedtext?lang=en' }], ja: [{ name: 'Japanese', url: 'https://www.youtube.com/api/timedtext?lang=ja' }] },
-    automatic_captions: { 'zh-Hans': [{ name: 'Chinese', url: 'https://www.youtube.com/api/timedtext?lang=en&tlang=zh-Hans' }], ja: [{ url: 'https://www.youtube.com/api/timedtext?lang=en&tlang=ja' }] },
-  }, 'vif8NQcjVf0');
+  const raw = fixtureMetadata();
+  raw.subtitles.ja = [{ ext: 'json3', name: 'Japanese', url: 'https://www.youtube.com/api/timedtext?lang=ja' }];
+  const metadata = sanitizeVideoInfo(raw, 'vif8NQcjVf0');
   assert.equal(metadata.languages.find(item => item.code === 'zh-Hans').autoTranslated, true);
   assert.equal(metadata.languages.find(item => item.code === 'ja').autoTranslated, false);
 });

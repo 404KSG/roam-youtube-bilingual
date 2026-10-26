@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeServer } from '../server/index.mjs';
 const id = 'vif8NQcjVf0';
-const info = { videoId: id, title: 'Test video', sourceLanguage: 'en', playerSourceLanguage: 'en', languages: [{ code: 'zh-Hans', name: 'Chinese' }, { code: 'ja', name: 'Japanese' }] };
+const info = { videoId: id, title: 'Test video', sourceLanguage: 'en', playerSourceLanguage: 'en', sourceTrack: { languageCode: 'en', kind: '', name: '' }, languages: [{ code: 'zh-Hans', name: 'Chinese' }, { code: 'ja', name: 'Japanese' }] };
 async function fixture(t, options = {}) {
   const server = makeServer({ infoFetcher: async () => info, captionFetcher: async () => [{ id: 0, start: 0, end: 2, text: 'English' }], verifyPeer: async () => {}, nativeCcReader: { read: async () => ({ state: 'off' }) }, ...options });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -13,7 +13,7 @@ const post = (body, origin = 'https://roamresearch.com') => ({ method: 'POST', h
 const frame = { x: 100, y: 100, width: 800, height: 450 };
 test('health describes compact bridge without models, tokens or API configuration', async (t) => {
   const base = await fixture(t); const data = await (await fetch(base + '/v1/youtube/health')).json();
-  assert.equal(data.provider, 'youtube-unified'); assert.equal(data.apiVersion, 6);
+  assert.equal(data.provider, 'youtube-unified'); assert.equal(data.apiVersion, 7);
   assert.equal('apiConfigured' in data, false); assert.equal('token' in data, false);
 });
 test('captions require a video-supported target and cache actual tracks by video and language', async (t) => {
@@ -44,6 +44,7 @@ test('target-first loading batches both tracks and the source request hits cache
 test('original captions stay fast and auto-translations use the proven preparation delay', async (t) => {
   const batches = [];
   const base = await fixture(t, { captionFetcher: undefined, infoFetcher: async () => ({ ...info, languages: [{ code: 'zh-Hans', autoTranslated: true }] }), captionBatchFetcher: async (_id, languages, _signal, options) => {
+    assert.equal(options.sourceLanguage, 'en'); assert.deepEqual(options.expectedSourceTrack, info.sourceTrack);
     batches.push({ languages, waitSeconds: options.waitSeconds });
     return { tracks: Object.fromEntries(languages.map(language => [language, [{ id: 0, start: 0, end: 2, text: language }]])) };
   } });

@@ -5,7 +5,9 @@ import { claimRenderer, releaseRenderer } from './lifecycle.mjs';
 import { resolveNativeCc } from './native-cc.mjs';
 import { createVideoPreferences } from './preferences.mjs';
 import { alignCaptionTracks } from './alignment.mjs';
-import { VERSION, SERVICE_URL, DEFAULT_CONFIG, validateConfig, verifyHealth, fittedFontSize } from './protocol.mjs';
+import { readingSegments, visibleSegment } from './reading.mjs';
+import { createSettingsPopover } from './settings.mjs';
+import { VERSION, SERVICE_URL, DEFAULT_CONFIG, validateConfig, verifyHealth } from './protocol.mjs';
 
 const STORAGE_KEY = 'roam-youtube-bilingual/session/v1';
 const commandLabel = 'YouTube subtitles: Settings';
@@ -24,7 +26,7 @@ async function saveConfig(owner, patch) {
     video.config = validateConfig(result.preferences); video.wantsEnabled = result.preferences.enabled;
     video.preferenceError = result.saved ? '' : 'Settings could not be saved on this device.';
     if (!video.wantsEnabled) video.turnOff();
-    video.updateIcon(); video.drawPair();
+    video.updateIcon(); video.updatePair();
   }
   if (owner.wantsEnabled && (patch.enabled === true || oldTarget !== owner.config.target)) await owner.changeTarget();
   if (owner.preferenceError) owner.notice(owner.preferenceError);
@@ -54,66 +56,16 @@ async function request(path, body, signal, observation) {
   });
   return data;
 }
-function languageName(language) {
-  try { return new Intl.DisplayNames(['en'], { type: 'language' }).of(language.code) || language.code; } catch { return language.code; }
-}
-function closeSettings(ref = settings) {
-  if (!ref || ref.closed) return;
-  ref.closed = true; ref.abort.abort();
-  if (ref.dialog.open) ref.dialog.close(); ref.host.remove();
-  if (settings === ref) settings = null;
-  if (!ref.owner.disposed) { ref.owner.toolbarButton.setAttribute('aria-expanded', 'false'); ref.owner.closeNativeGate(); if (active) ref.owner.sync(); }
-}
+function closeSettings(ref = settings) { ref?.close(); }
 function openSettings(owner) {
   if (!owner || owner.disposed) return;
-  if (settings) { settings.dialog.focus(); return; }
-  owner.closeNativeGate();
-  const host = el('div', 'ryb-settings-host'); host.style.cssText = 'position:fixed!important;inset:0!important;pointer-events:none!important;z-index:2147483647!important';
-  const shadow = host.attachShadow({ mode: 'open' }); const style = el('style'); style.textContent = STYLE;
-  const dialog = el('dialog', 'ryb-settings');
-  const ref = { host, dialog, owner, abort: new AbortController() }; settings = ref;
-  for (const type of ['pointerdown', 'click', 'keydown']) dialog.addEventListener(type, (event) => event.stopPropagation());
-  dialog.addEventListener('close', () => closeSettings(ref));
-  dialog.append(el('h2', '', 'Bilingual subtitles'));
-  const enabledLabel = el('label', 'ryb-toggle-row');
-  const enabled = el('input'); enabled.type = 'checkbox'; enabled.checked = owner.wantsEnabled; enabled.setAttribute('aria-label', 'Enable bilingual subtitles');
-  enabledLabel.append(el('span', '', 'Enable bilingual subtitles'), enabled); dialog.append(enabledLabel);
-  const languageLabel = el('label', 'ryb-field'); languageLabel.append(el('span', '', 'Translation language'));
-  const language = el('select'); language.name = 'target'; language.disabled = true;
-  language.append(el('option', '', 'Loading available languages…')); languageLabel.append(language); dialog.append(languageLabel);
-  const fontLabel = el('label', 'ryb-field');
-  const sizeText = el('span', '', `Font size: ${owner.config.fontSize} px`);
-  const font = el('input'); font.type = 'range'; font.name = 'fontSize'; font.min = '12'; font.max = '36'; font.step = '1'; font.value = String(owner.config.fontSize); font.setAttribute('aria-label', 'Subtitle font size');
-  fontLabel.append(sizeText, font); dialog.append(fontLabel);
-  dialog.append(el('p', 'ryb-hint', 'English above translation. Two lines share one background; long captions shrink to fit. Settings are saved for this video on this device.'));
-  const status = el('p', 'ryb-status'); status.setAttribute('role', 'status'); status.textContent = owner.loading ? owner.noticeBox.textContent || 'Preparing subtitles…' : owner.lastError || owner.preferenceError || ''; ref.status = status; dialog.append(status);
-  dialog.append(el('p', 'ryb-hint', `Version ${VERSION}`));
-  const footer = el('div', 'ryb-settings-footer'); footer.append(button('Done', () => closeSettings(ref), 'ryb-primary')); dialog.append(footer);
-  const save = async patch => {
-    try { await saveConfig(owner, patch); } catch (error) { if (!ref.closed) status.textContent = error.message; return; }
-    if (!ref.closed) { enabled.checked = owner.wantsEnabled; sizeText.textContent = `Font size: ${owner.config.fontSize} px`; status.textContent = owner.lastError || owner.preferenceError || ''; }
-  };
-  font.addEventListener('input', () => { void save({ fontSize: Number(font.value) }); });
-  language.addEventListener('change', () => { void save({ target: language.value }); });
-  enabled.addEventListener('change', () => { void save({ enabled: enabled.checked }); });
-  shadow.append(style, dialog);
-  const fs = document.fullscreenElement;
-  (fs && fs.contains(owner.iframe) ? fs : document.body).append(host);
-  owner.toolbarButton.setAttribute('aria-expanded', 'true'); dialog.showModal(); owner.sync();
-  void owner.loadInfo(ref.abort.signal).then((info) => {
-    if (ref.closed) return;
-    language.replaceChildren();
-    const priority = ['zh-Hans', 'zh-Hant', 'ja'];
-    const languages = [...info.languages].sort((a, b) => {
-      const ai = priority.includes(a.code) ? priority.indexOf(a.code) : 99, bi = priority.includes(b.code) ? priority.indexOf(b.code) : 99;
-      return ai - bi || languageName(a).localeCompare(languageName(b), 'en');
-    });
-    for (const item of languages) { const option = el('option', '', languageName(item)); option.value = item.code; language.append(option); }
-    language.value = owner.config.target;
-    if (!language.value) { language.selectedIndex = -1; status.textContent = 'Choose a translation language available for this video.'; }
-    language.disabled = !languages.length;
-    if (!info.sourceLanguage) { enabled.disabled = true; status.textContent = 'This video has no available English captions.'; }
-  }).catch((error) => { if (!ref.closed && error.name !== 'AbortError') status.textContent = error.message; });
+  if (settings?.owner === owner) { closeSettings(); return; }
+  closeSettings();
+  settings = createSettingsPopover(owner, { css: STYLE, version: VERSION, save: patch => saveConfig(owner, patch), onClose: ref => {
+    if (settings === ref) settings = null;
+    if (active && !owner.disposed) owner.sync();
+  } });
+  owner.sync();
 }
 function toolbarIcon() {
   const icon = el('span', 'bp3-icon bp3-icon-translate');
@@ -213,7 +165,7 @@ class VideoCaptions {
     if (this.tracks.has(language)) return this.tracks.get(language);
     const data = await request('/v1/youtube/captions', { videoId: this.videoId, target: language }, signal);
     signal?.throwIfAborted();
-    if (this.disposed || data.videoId !== this.videoId || data.language !== language) throw new Error('The captions do not match the current video or language.');
+    if (this.disposed || data.videoId !== this.videoId || data.language !== language || data.captionPolicy !== 'same-source-v1' || data.sourceLanguage !== this.info?.sourceLanguage) throw new Error('The captions do not match the current video, language, or English source track.');
     const cues = normalizeCues(data.cues);
     if (!cues.length) throw new Error('The selected captions have no valid timestamps.');
     this.tracks.set(language, cues); return cues;
@@ -236,7 +188,7 @@ class VideoCaptions {
     this.restoreAttempted = false; this.lastPlayerState = -1; this.lastError = ''; this.updateIcon();
   }
   restoreIfNeeded(playbackStarted = false) {
-    if (!this.wantsEnabled || this.enabled || this.restoreAttempted || this.disposed || settings || document.hidden || this.surface.host.style.display === 'none') return;
+    if (!this.wantsEnabled || this.enabled || this.restoreAttempted || this.disposed || document.hidden || this.surface.host.style.display === 'none') return;
     if (!playbackStarted && [...videos.values()].some(video => video !== this && video.enabled)) return;
     this.restoreAttempted = true; void this.turnOn();
   }
@@ -264,7 +216,7 @@ class VideoCaptions {
       if (error.name !== 'AbortError' && epoch === this.epoch) { this.turnOff(); this.lastError = error.message; this.notice(error.message); }
     } finally { if (this.startRequest === abort) { this.startRequest = null; this.loading = false; this.updateIcon(); } }
   }
-  clearPair() { this.pair = null; this.box.hidden = true; this.source.textContent = ''; this.target.textContent = ''; }
+  clearPair() { this.pair = null; this.renderCache = null; this.box.hidden = true; this.source.textContent = ''; this.target.textContent = ''; }
   closeNativeGate() {
     this.ccState = 'unknown'; this.ccVerifiedAt = 0; this.ccRequest?.abort(); this.ccRequest = null; this.clearPair();
     this.nextCcCheck = 0;
@@ -290,7 +242,7 @@ class VideoCaptions {
     return { x: screenX + rect.x * scale, y: screenY + outerHeight - innerHeight * scale + rect.y * scale, width: rect.width * scale, height: rect.height * scale };
   }
   async checkNativeCc() {
-    if (!this.enabled || this.loading || this.disposed || this.ccRequest || settings || document.hidden || this.surface.host.style.display === 'none' || Date.now() < (this.nextCcCheck || 0)) return;
+    if (!this.enabled || this.loading || this.disposed || this.ccRequest || document.hidden || this.surface.host.style.display === 'none' || Date.now() < (this.nextCcCheck || 0)) return;
     const epoch = this.epoch, videoId = this.videoId, abort = this.ccRequest = new AbortController();
     const before = Date.now(), frame = this.screenFrame();
     try {
@@ -320,37 +272,64 @@ class VideoCaptions {
     const sourceCues = this.tracks.get(this.info?.sourceLanguage), targetCues = this.tracks.get(this.config.target);
     if (!sourceCues || !targetCues) { this.clearPair(); return; }
     if (this.alignment?.sourceCues !== sourceCues || this.alignment?.targetCues !== targetCues || this.alignment?.language !== this.config.target) {
-      this.alignment = { sourceCues, targetCues, language: this.config.target, pairs: alignCaptionTracks(sourceCues, targetCues, this.config.target) };
+      const pairs = alignCaptionTracks(sourceCues, targetCues, this.config.target);
+      this.alignment = { sourceCues, targetCues, language: this.config.target, pairs, segments: readingSegments(pairs, this.config.target) };
     }
-    const pair = this.alignment.pairs[activeCueIndex(this.alignment.pairs, this.time)];
-    if (!pair?.source || !pair.target) { this.clearPair(); return; }
+    const pair = visibleSegment(this.alignment.segments, this.time, segment => this.fitsReadingSegment(segment));
+    if (!pair?.source) { this.clearPair(); return; }
     this.pair = pair; this.drawPair();
+  }
+  textWidth(text, size) {
+    this.measure.font = `400 ${size}px Arial, "PingFang SC", sans-serif`;
+    return this.measure.measureText(text).width;
+  }
+  fitsReadingSegment(segment) {
+    const width = Math.min(this.iframe.getBoundingClientRect().width - 40, 1060), config = this.config;
+    const cache = this.fitCache;
+    if (cache?.segment === segment && cache.width === width && cache.config === config) return cache.fits;
+    const fits = this.textWidth(segment.source, config.sourceFontSize) <= width * 1.6 && this.textWidth(segment.target, config.targetFontSize) <= width * 1.6;
+    this.fitCache = { segment, width, config, fits }; return fits;
+  }
+  fitRow(row, requested) {
+    if (row.hidden) return;
+    row.style.fontSize = `${requested}px`;
+    const fits = size => row.getBoundingClientRect().height <= size * 2.6 + .5 && row.scrollWidth <= row.clientWidth + 1;
+    if (!fits(requested)) {
+      let low = .5, high = requested;
+      for (let i = 0; i < 10; i++) { const middle = (low + high) / 2; row.style.fontSize = `${middle}px`; if (fits(middle)) low = middle; else high = middle; }
+      row.style.fontSize = `${Math.floor(low * 10) / 10}px`;
+    }
+    row.dataset.fontSize = String(parseFloat(row.style.fontSize));
   }
   drawPair() {
     if (!this.enabled || this.ccState !== 'off' || Date.now() - this.ccVerifiedAt > 1500 || !this.pair || this.disposed) { this.box.hidden = true; return; }
-    const rect = this.iframe.getBoundingClientRect(), pair = this.pair;
-    if (rect.width < 160 || rect.height < 90 || !pair.source || !pair.target) { this.box.hidden = true; return; }
+    const rect = this.iframe.getBoundingClientRect(), pair = this.pair, config = this.config;
+    if (rect.width < 160 || rect.height < 90 || !pair.source) { this.box.hidden = true; return; }
+    const previous = this.renderCache;
+    if (previous?.pair === pair && previous.config === config && previous.width === rect.width && previous.height === rect.height) { this.box.hidden = false; return; }
     if (this.source.textContent !== pair.source) this.source.textContent = pair.source;
     if (this.target.textContent !== pair.target) this.target.textContent = pair.target;
-    const available = rect.width - 28;
-    this.measure.font = `400 ${this.config.fontSize}px Arial, "PingFang SC", sans-serif`;
-    const measured = Math.max(this.measure.measureText(pair.source).width, this.measure.measureText(pair.target).width);
-    const font = fittedFontSize(this.config.fontSize, available, measured);
-    const textWidth = measured * font / this.config.fontSize;
-    const width = Math.min(rect.width, Math.max(textWidth + 24, 80));
-    const height = font * 2.5 + 12, bottom = Math.max(10, rect.height * .08);
-    Object.assign(this.box.style, { width: `${width}px`, height: `${height}px`, left: `${Math.max(0, (rect.width - width) / 2)}px`, top: `${Math.max(0, rect.height - bottom - height)}px`, fontSize: `${font}px`, borderRadius: width >= rect.width - .5 ? '0px' : '4px' });
+    this.target.hidden = !pair.target;
+    this.source.style.color = config.sourceColor; this.target.style.color = config.targetColor;
+    const textWidth = Math.max(this.textWidth(pair.source, config.sourceFontSize), this.textWidth(pair.target, config.targetFontSize));
+    const width = Math.min(rect.width - 20, 1080, Math.max(100, textWidth + 20));
+    Object.assign(this.box.style, { visibility: 'hidden', width: `${width}px`, height: 'auto', left: `${(rect.width - width) / 2}px`, top: '0px' });
     this.box.hidden = false;
-    const range = document.createRange();
-    const renderedWidth = Math.max(...[this.source, this.target].map((row) => { range.selectNodeContents(row); return range.getBoundingClientRect().width; }));
-    const innerWidth = Math.max(1, width - 24);
-    const finalFont = renderedWidth > innerWidth ? font * (innerWidth - 1) / renderedWidth : font;
-    this.box.style.fontSize = `${finalFont}px`; this.box.dataset.fontSize = String(finalFont);
+    this.fitRow(this.source, config.sourceFontSize); this.fitRow(this.target, config.targetFontSize);
+    const budget = Math.max(24, rect.height * .45), firstHeight = this.box.getBoundingClientRect().height;
+    if (firstHeight > budget) {
+      const scale = Math.max(.1, (budget - 16) / Math.max(1, firstHeight - 16));
+      this.fitRow(this.source, parseFloat(this.source.style.fontSize) * scale);
+      this.fitRow(this.target, parseFloat(this.target.style.fontSize) * scale);
+    }
+    const height = this.box.getBoundingClientRect().height, bottom = Math.max(10, rect.height * .08);
+    this.box.style.top = `${Math.max(0, rect.height - bottom - height)}px`; this.box.style.visibility = 'visible';
+    this.renderCache = { pair, config, width: rect.width, height: rect.height };
   }
   sync() {
-    this.mountToolbar(); this.surface.sync({ blocked: !!settings });
-    if (this.wantsEnabled && !document.hidden && !settings && this.surface.host.style.display !== 'none') { this.connect(); this.restoreIfNeeded(); }
-    this.drawPair(); void this.checkNativeCc();
+    this.mountToolbar(); this.surface.sync();
+    if (this.wantsEnabled && !document.hidden && this.surface.host.style.display !== 'none') { this.connect(); this.restoreIfNeeded(); }
+    this.updatePair(); void this.checkNativeCc();
   }
   destroy() { this.turnOff(); this.disposed = true; this.cancelInfo(); this.clock?.destroy(); this.surface.destroy(); this.toolbarButton.remove(); this.fallback?.remove(); if (settings?.owner === this) closeSettings(); }
 }

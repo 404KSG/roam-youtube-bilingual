@@ -15,9 +15,10 @@ export async function runUnifiedAcceptance(options = {}) {
   const plugin = window.roamYouTubeBilingual;
   plugin.onunload();
   const frame = document.querySelector('iframe');
-  const preferenceKey = 'roam-youtube-bilingual/video/v1/M7lc1UVf-VE', preferenceBefore = localStorage.getItem(preferenceKey);
+  const preferenceKeys = ['roam-youtube-bilingual/video/v1/M7lc1UVf-VE', 'roam-youtube-bilingual/video/v2/M7lc1UVf-VE'];
+  const preferenceBefore = preferenceKeys.map(key => localStorage.getItem(key));
   const legacyKey = 'roam-youtube-bilingual/session/v1', legacyBefore = sessionStorage.getItem(legacyKey);
-  localStorage.removeItem(preferenceKey);
+  preferenceKeys.forEach(key => localStorage.removeItem(key));
   const before = frame.getBoundingClientRect().toJSON();
   const originalFetch = window.fetch;
   const source = 'This English sentence\nwas previously wrapped onto two lines.';
@@ -28,11 +29,11 @@ export async function runUnifiedAcceptance(options = {}) {
     const path = new URL(url).pathname; const body = options.body ? JSON.parse(options.body) : {};
     calls.push({ path, body });
     let data;
-    if (path.endsWith('/health')) data = { ok: true, service: 'roam-youtube-bilingual', apiVersion: 6, provider: 'youtube-unified' };
+    if (path.endsWith('/health')) data = { ok: true, service: 'roam-youtube-bilingual', apiVersion: 7, provider: 'youtube-unified' };
     else if (path.endsWith('/video-info')) data = { videoId: body.videoId, title: 'Fixture video', sourceLanguage: 'en', languages: [{ code: 'en', name: 'English' }, { code: 'zh-Hans', name: 'Chinese' }, { code: 'ja', name: 'Japanese' }, { code: 'fr', name: 'French' }] };
     else if (path.endsWith('/captions')) {
       const parts = targets[body.target] || targets['zh-Hans'];
-      data = { videoId: body.videoId, language: body.target, cues: body.target === 'en'
+      data = { videoId: body.videoId, language: body.target, sourceLanguage: 'en', captionPolicy: 'same-source-v1', cues: body.target === 'en'
         ? [{ start: 0, end: 4, text: source }, { start: 4, end: 8, text: 'Next English segment.' }]
         : [{ start: 0, end: 2, text: parts[0] }, { start: 2, end: 4, text: parts[1] }, { start: 4, end: 8, text: '下一段译文。' }] };
     }
@@ -45,12 +46,12 @@ export async function runUnifiedAcceptance(options = {}) {
   const host = () => document.querySelector('.ryb-surface-host');
   const root = () => host().shadowRoot;
   const setting = () => document.querySelector('.ryb-settings-host')?.shadowRoot;
-  const done = () => [...setting().querySelectorAll('button')].find((node) => node.textContent === 'Done').click();
+  const done = () => setting().querySelector('[aria-label="Close subtitle settings"]').click();
   const clock = (time) => window.dispatchEvent(new MessageEvent('message', { source: frame.contentWindow, origin: 'https://www.youtube.com', data: { event: 'infoDelivery', info: { currentTime: time, playerState: 2 } } }));
   let held = false;
   const cleanup = () => {
     window.fetch = originalFetch; plugin.onunload();
-    if (preferenceBefore === null) localStorage.removeItem(preferenceKey); else localStorage.setItem(preferenceKey, preferenceBefore);
+    preferenceKeys.forEach((key, i) => preferenceBefore[i] === null ? localStorage.removeItem(key) : localStorage.setItem(key, preferenceBefore[i]));
     if (legacyBefore === null) sessionStorage.removeItem(legacyKey); else sessionStorage.setItem(legacyKey, legacyBefore);
     if (hiddenDescriptor) Object.defineProperty(document, 'hidden', hiddenDescriptor); else delete document.hidden;
     delete window.__unifiedFixtureCleanup;
@@ -67,14 +68,15 @@ export async function runUnifiedAcceptance(options = {}) {
     icon.click();
     await wait(() => setting()?.querySelector('select').disabled === false);
     const fields = [...setting().querySelectorAll('input,select')];
-    assert(fields.length === 3 && fields.some((field) => field.type === 'checkbox') && fields.some((field) => field.name === 'target') && fields.some((field) => field.name === 'fontSize'), 'settings contain only enable, language and font size');
-    assert(setting().querySelector('h2').textContent === 'Bilingual subtitles' && !/[\u4e00-\u9fff]/.test(setting().querySelector('dialog').textContent), 'all settings labels and language names are English');
+    assert(fields.length === 6 && fields.some(field => field.type === 'checkbox') && ['target', 'sourceFontSize', 'targetFontSize', 'sourceColor', 'targetColor'].every(name => fields.some(field => field.name === name)), 'settings contain enable, language and independent appearance controls without API fields');
+    assert(setting().querySelector('h2').textContent === 'Subtitles' && !/[\u4e00-\u9fff]/.test(setting().querySelector('[role=dialog]').textContent), 'all settings labels and language names are English');
     assert([...setting().querySelector('select').options].map((option) => option.value).includes('ja'), 'language choices come from video metadata');
     setting().querySelector('input[type=checkbox]').checked = true;
     setting().querySelector('input[type=checkbox]').dispatchEvent(new Event('change'));
     await wait(() => icon.dataset.loading === 'false');
     clock(1);
-    assert(calls.every((call) => !call.path.endsWith('native-cc-state')), 'native CC verification pauses while settings are open');
+    await wait(() => calls.some(call => call.path.endsWith('native-cc-state')));
+    assert(!setting().querySelector('[role=dialog]').matches(':modal'), 'non-modal settings keep scoped native CC verification active');
     done();
     await wait(() => !root().querySelector('.ryb-caption-box').hidden);
     const box = root().querySelector('.ryb-caption-box'), a = root().querySelector('.ryb-source'), b = root().querySelector('.ryb-target');
@@ -85,20 +87,21 @@ export async function runUnifiedAcceptance(options = {}) {
     assert(a.textContent === 'Next English segment.' && b.textContent === '下一段译文。', 'a forward seek updates both rows to the next English segment');
     clock(1);
     assert(a.textContent === source.replace(/\n/g, ' ') && b.textContent === '第一行中文第二行中文', 'a backward seek restores the previous complete bilingual segment');
-    assert(box.children.length === 2 && getComputedStyle(a).whiteSpace === 'nowrap' && getComputedStyle(b).whiteSpace === 'nowrap', 'exactly two non-wrapping rows share one container');
+    assert(box.children.length === 2 && [a, b].every(row => row.getBoundingClientRect().height <= 2 * parseFloat(getComputedStyle(row).lineHeight) + 1), 'one shared container holds at most two lines per language');
     assert(getComputedStyle(box).backgroundColor === 'rgb(9, 12, 16)' && getComputedStyle(a).backgroundColor === 'rgba(0, 0, 0, 0)' && getComputedStyle(b).backgroundColor === 'rgba(0, 0, 0, 0)', 'one opaque shared background contains both independently downloaded tracks');
     const ar = a.getBoundingClientRect(), br = b.getBoundingClientRect();
     assert(br.top - ar.bottom <= 2 && br.top >= ar.bottom, 'English and translation are separated by at most two pixels');
-    assert(a.scrollWidth <= box.clientWidth - 20 && b.scrollWidth <= box.clientWidth - 20, 'long lines fit horizontally instead of becoming four lines');
+    assert(a.scrollWidth <= box.clientWidth - 20 && b.scrollWidth <= box.clientWidth - 20, 'both language blocks stay inside the shared caption box');
     assert(box.getBoundingClientRect().bottom <= frame.getBoundingClientRect().bottom - 8, 'renderer positions its own shared box at the video bottom without masking native text');
     if (options.capture) { held = true; window.__unifiedFixtureCleanup = cleanup; return { ...results, screenshotUsesMockData: true }; }
     icon.click();
     await wait(() => setting()?.querySelector('select').disabled === false);
     setting().querySelector('[name=target]').value = 'ja'; setting().querySelector('[name=target]').dispatchEvent(new Event('change'));
-    setting().querySelector('[name=fontSize]').value = '14'; setting().querySelector('[name=fontSize]').dispatchEvent(new Event('input'));
+    setting().querySelector('[name=sourceFontSize]').value = '14'; setting().querySelector('[name=sourceFontSize]').dispatchEvent(new Event('input'));
+    setting().querySelector('[name=targetFontSize]').value = '18'; setting().querySelector('[name=targetFontSize]').dispatchEvent(new Event('input'));
     done();
     await wait(() => b.textContent === '日本語の字幕を一行にまとめます。' && !box.hidden);
-    assert(Number(box.dataset.fontSize) <= 14 && Number(box.dataset.fontSize) > 0, 'font size applies to both rows');
+    assert(Number(a.dataset.fontSize) <= 14 && Number(a.dataset.fontSize) > 0 && Number(b.dataset.fontSize) <= 18 && Number(b.dataset.fontSize) > Number(a.dataset.fontSize), 'English and translation sizes apply independently');
     assert(calls.filter((call) => call.path.endsWith('/captions')).length === 3, 'target changes reuse English but download a separate target track');
     assert(calls.filter((call) => call.path.endsWith('/captions')).some((call) => call.body.target === 'ja'), 'Japanese selection requests the actual Japanese track');
     ccState = 'unknown'; ccReason = 'controls-hidden';

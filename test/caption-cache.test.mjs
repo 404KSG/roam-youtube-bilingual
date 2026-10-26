@@ -15,6 +15,14 @@ test('caption cache survives a helper restart without retaining extra fields', a
   const raw = await readFile(join(dir, `${id}.zh-Hans.json`), 'utf8');
   assert.doesNotMatch(raw, /DO_NOT_STORE|token/);
 });
+test('old ASR-derived caches and a different English source binding cannot masquerade as same-source captions', async t => {
+  const dir = await directory(t), cache = createCaptionCache(dir);
+  await writeFile(join(dir, `${id}.zh-Hans.json`), JSON.stringify({ schema: 1, source: 'youtube', videoId: id, language: 'zh-Hans', savedAt: Date.now(), cues }));
+  assert.equal(await cache.get(id, 'zh-Hans'), undefined);
+  await cache.put(id, 'zh-Hans', cues, undefined, 'manual-en');
+  assert.equal(await cache.get(id, 'zh-Hans', undefined, 'asr-en'), undefined);
+  assert.equal((await cache.get(id, 'zh-Hans', undefined, 'manual-en'))[0].text, 'Caption text');
+});
 test('expired or language-mismatched cache entries are never used', async t => {
   const dir = await directory(t); let now = 1000;
   const cache = createCaptionCache(dir, { now: () => now, maxAgeMs: 100 });
