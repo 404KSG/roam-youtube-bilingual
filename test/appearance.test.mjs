@@ -3,6 +3,13 @@ import assert from 'node:assert/strict';
 import { validateConfig } from '../src/protocol.mjs';
 import { createVideoPreferences } from '../src/preferences.mjs';
 
+test('new subtitle preferences default to white English at 20 px and white translation at 18 px', () => {
+  assert.deepEqual(validateConfig(), { target: 'zh-Hans', sourceFontSize: 20, targetFontSize: 18, sourceColor: '#ffffff', targetColor: '#ffffff' });
+  const storage = { getItem: () => null, setItem() {} };
+  const prefs = createVideoPreferences(storage).get('vif8NQcjVf0');
+  assert.equal(prefs.sourceFontSize, 20); assert.equal(prefs.targetFontSize, 18);
+  assert.equal(prefs.sourceColor, '#ffffff'); assert.equal(prefs.targetColor, '#ffffff');
+});
 test('English and translation retain independent sizes and safe colors', () => {
   const settings = validateConfig({ target: 'zh-Hans', sourceFontSize: 14, targetFontSize: 22, sourceColor: '#aabbcc', targetColor: '#FFD580' });
   assert.equal(settings.sourceFontSize, 14); assert.equal(settings.targetFontSize, 22);

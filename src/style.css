@@ -5,7 +5,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .ryb-scene{position:absolute;inset:0;overflow:hidden;pointer-events:none;font-family:Arial,"PingFang SC",sans-serif}
 .ryb-caption-box{position:absolute;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;padding:7px 10px;border-radius:5px;background:#090c10;color:#fff;text-align:center;pointer-events:none;font-family:Arial,"PingFang SC",sans-serif;font-weight:400}
 .ryb-line{flex:none;display:block;width:100%;max-width:100%;min-width:0;margin:0;padding:0;background:transparent;white-space:normal;overflow-wrap:anywhere;word-break:normal;line-height:1.3;font-weight:400;text-align:center;text-shadow:none}
-.ryb-source{color:#c7cad6}.ryb-target{color:#fff}
+.ryb-source{color:#fff}.ryb-target{color:#fff}
 .ryb-notice{position:absolute;right:12px;top:12px;max-width:min(340px,calc(100% - 24px));padding:8px 10px;border:1px solid #ffffff28;border-radius:5px;background:#101820ec;color:#f5f7fa;font:12px/1.5 Inter,-apple-system,BlinkMacSystemFont,sans-serif;overflow-wrap:anywhere}
 .ryb-settings{position:fixed;pointer-events:auto;margin:0;padding:10px;overflow:auto;overscroll-behavior:contain;border:1px solid var(--ryb-stroke);border-radius:8px;background:var(--ryb-panel);color:var(--ryb-ink);font:12px/1.4 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 8px 24px #16172618,0 1px 4px #1617260a;text-align:left}
 .ryb-settings:focus{outline:none}

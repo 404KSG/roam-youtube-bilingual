@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createVideoPreferences } from '../src/preferences.mjs';
 const a = 'vif8NQcjVf0', b = 'M7lc1UVf-VE';
-const japanese = { enabled: true, target: 'ja', sourceFontSize: 24, targetFontSize: 24, sourceColor: '#c7cad6', targetColor: '#ffffff' };
+const japanese = { enabled: true, target: 'ja', sourceFontSize: 24, targetFontSize: 24, sourceColor: '#ffffff', targetColor: '#ffffff' };
 const memoryStorage = () => { const values = new Map(); return { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) }; };
 
 test('a video keeps its enabled state, language, and size across a new store instance', () => {
@@ -14,7 +14,7 @@ test('a video keeps its enabled state, language, and size across a new store ins
 test('another video neither inherits enablement nor overwrites an existing choice', () => {
   const store = createVideoPreferences(memoryStorage());
   store.set(a, { enabled: true, target: 'ja', fontSize: 24 });
-  assert.deepEqual(store.get(b), { enabled: false, target: 'zh-Hans', sourceFontSize: 16, targetFontSize: 20, sourceColor: '#c7cad6', targetColor: '#ffffff' });
+  assert.deepEqual(store.get(b), { enabled: false, target: 'zh-Hans', sourceFontSize: 20, targetFontSize: 18, sourceColor: '#ffffff', targetColor: '#ffffff' });
   store.set(b, { enabled: true, target: 'fr', fontSize: 18 });
   assert.deepEqual(store.get(a), japanese);
 });

@@ -328,6 +328,7 @@ class VideoCaptions {
   }
   sync() {
     this.mountToolbar(); this.surface.sync();
+    if (settings?.owner === this) settings.schedulePosition();
     if (this.wantsEnabled && !document.hidden && this.surface.host.style.display !== 'none') { this.connect(); this.restoreIfNeeded(); }
     this.updatePair(); void this.checkNativeCc();
   }
@@ -343,7 +344,10 @@ function onload() {
   if (!claimRenderer(window, lifecycle, { unknownRenderer: () => !!document.querySelector('.ryb-surface-host,.ryb-settings-host,.ryb-toolbar-button,[data-ryb-toolbar]') })) { console.error('Roam YouTube Bilingual did not start: the previous instance could not be unloaded safely.'); return false; }
   active = true;
   let defaults = { ...DEFAULT_CONFIG }, storage;
-  try { defaults = validateConfig(JSON.parse(sessionStorage.getItem(STORAGE_KEY) || '{}')); } catch { /* Legacy session defaults are optional. */ }
+  try {
+    const legacy = JSON.parse(sessionStorage.getItem(STORAGE_KEY) || '{}');
+    if (legacy?.target) defaults.target = validateConfig({ target: legacy.target }).target;
+  } catch { /* Keep a legacy language preference, but use the current appearance defaults. */ }
   try { storage = window.localStorage; } catch { /* Report unavailable persistence when a choice is saved. */ }
   preferences = createVideoPreferences(storage, defaults);
   globalStyle = el('style'); globalStyle.dataset.rybToolbar = 'true'; globalStyle.textContent = '.ryb-toolbar-button{width:30px!important;min-width:30px!important;height:30px!important;padding:6px!important;display:inline-flex!important;align-items:center;justify-content:center;background:transparent;border:0;border-radius:3px;color:#607789;cursor:pointer}.ryb-toolbar-button:hover{background:#6077891c}.ryb-toolbar-button[data-active="true"]{color:#2378b5;background:#2378b512}.ryb-toolbar-button .bp3-icon{font-size:18px;line-height:1;pointer-events:none}.ryb-toolbar-button[data-active="true"] .bp3-icon{color:#2378b5!important}.ryb-toolbar-button[data-layout="inline"]{width:24px!important;min-width:24px!important;height:24px!important;min-height:24px!important;padding:4px!important}.ryb-toolbar-button[data-layout="inline"] .bp3-icon{font-size:16px;font-family:Icons16!important}.rm-video-player__spacing-wrapper:not(:hover) .rm-video-player__gutter:not(:focus-within) .ryb-toolbar-button{display:none!important}.ryb-toolbar-fallback{display:flex;justify-content:flex-end;min-height:30px}.ryb-toolbar-button:focus-visible{outline:2px solid #2378b5;outline-offset:2px}'; document.head.append(globalStyle);

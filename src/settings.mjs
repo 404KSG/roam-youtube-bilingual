@@ -1,14 +1,25 @@
 import { DEFAULT_CONFIG } from './protocol.mjs';
 
 export function popoverPosition(anchor, size, viewport, video) {
-  const leftEdge = Math.max(8, video.left), rightEdge = Math.min(viewport.width - 8, video.right);
-  const left = Math.max(leftEdge, Math.min(anchor.right - size.width, rightEdge - size.width));
-  const top = Math.max(video.bottom, anchor.bottom) + 6;
-  return { left, top, maxHeight: Math.max(0, viewport.height - top - 8) };
+  const viewLeft = (viewport.left || 0) + 8, viewTop = (viewport.top || 0) + 8;
+  const viewRight = (viewport.left || 0) + viewport.width - 8, viewBottom = (viewport.top || 0) + viewport.height - 8;
+  const columnLeft = Math.max(viewLeft, video.left), columnRight = Math.min(viewRight, video.right);
+  const fitsColumn = columnRight - columnLeft >= size.width;
+  const minLeft = fitsColumn ? columnLeft : viewLeft, maxLeft = (fitsColumn ? columnRight : viewRight) - size.width;
+  const left = Math.max(minLeft, Math.min(anchor.right - size.width, maxLeft));
+  const below = Math.max(video.bottom, anchor.bottom) + 6;
+  if (below >= viewTop && below + size.height <= viewBottom) return { left, top: below, maxHeight: viewBottom - below, placement: 'below-video' };
+  const anchorTop = Number.isFinite(anchor.top) && anchor.top >= video.bottom - 1 ? anchor.top : video.bottom;
+  const aboveBottom = Math.min(viewBottom, anchorTop - 6), above = aboveBottom - size.height;
+  if (above >= viewTop) return { left, top: above, maxHeight: aboveBottom - viewTop, placement: 'above-trigger' };
+  // When neither side fits, shift into the viewport. Scroll the card only if
+  // the whole viewport is shorter than its content; never move the page.
+  const top = Math.max(viewTop, Math.min(above, viewBottom - size.height));
+  return { left, top, maxHeight: Math.max(0, viewBottom - viewTop), placement: 'viewport-fit' };
 }
 
-// A compact, non-modal card. Ordinary views stay below the video; color editors
-// expand in place. Temporary scroll space is owned and removed on dismissal.
+// A compact, non-modal card. Prefer below the video, flip upward when needed,
+// and keep the complete card inside the viewport without changing page layout.
 export function createSettingsPopover(owner, { css, version, save, onClose }) {
   const node = (tag, cls, text) => { const result = document.createElement(tag); if (cls) result.className = cls; if (text !== undefined) result.textContent = text; return result; };
   const action = (text, label, callback, cls = '') => { const result = node('button', cls, text); result.type = 'button'; result.setAttribute('aria-label', label); result.addEventListener('click', callback); return result; };
@@ -17,54 +28,39 @@ export function createSettingsPopover(owner, { css, version, save, onClose }) {
   const shadow = host.attachShadow({ mode: 'open' }), style = node('style'); style.textContent = css;
   const panel = node('section', 'ryb-settings'); panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', 'Bilingual subtitle settings'); panel.setAttribute('aria-modal', 'false'); panel.tabIndex = -1;
   const abort = new AbortController(), ref = { host, dialog: panel, owner, abort, closed: false };
-  const fields = new Map(), swatches = new Map(), editors = new Map(), scrollPositions = [];
-  let anchorOffset = { right: 0, bottom: 0 }, spacer, positioning = false, expandedColor;
+  const fields = new Map(), swatches = new Map(), editors = new Map();
+  let anchorOffset = { right: 0, top: 0, bottom: 0 }, positioning = false, expandedColor, positionFrame = 0, positionKey, layoutObserver, contentObserver;
   const anchorFor = video => {
     const anchor = owner.toolbarButton.getBoundingClientRect();
-    if (anchor.width) anchorOffset = { right: anchor.right - video.right, bottom: anchor.bottom - video.bottom };
-    return { right: video.right + anchorOffset.right, bottom: video.bottom + anchorOffset.bottom };
+    if (anchor.width) anchorOffset = { right: anchor.right - video.right, top: anchor.top - video.bottom, bottom: anchor.bottom - video.bottom };
+    return { right: video.right + anchorOffset.right, top: video.bottom + anchorOffset.top, bottom: video.bottom + anchorOffset.bottom };
   };
-  const makeRoom = height => {
-    const insertion = owner.toolbarButton.closest('.ryb-toolbar-fallback') || owner.iframe.closest('.rm-video-player__spacing-wrapper,.rm-iframe__spacing-wrapper') || owner.iframe;
-    if (!insertion.isConnected) return;
-    if (!spacer) {
-      for (let element = insertion.parentElement; element; element = element.parentElement) scrollPositions.push({ element, top: element.scrollTop, left: element.scrollLeft });
-      spacer = node('div', 'ryb-settings-spacer'); spacer.setAttribute('aria-hidden', 'true'); spacer.style.pointerEvents = 'none'; insertion.insertAdjacentElement('afterend', spacer);
-    }
-    spacer.style.height = `${height + 12}px`;
-    spacer.scrollIntoView({ block: 'end', inline: 'nearest', behavior: 'instant' });
-    for (const position of scrollPositions) { position.afterTop = position.element.scrollTop; position.afterLeft = position.element.scrollLeft; }
-  };
-  ref.position = (reveal = false) => {
+  ref.position = () => {
     if (ref.closed || positioning) return;
     positioning = true;
     try {
-      for (const position of scrollPositions) if (Math.abs(position.element.scrollTop - position.afterTop) > 1 || Math.abs(position.element.scrollLeft - position.afterLeft) > 1) position.userMoved = true;
-      let video = owner.iframe.getBoundingClientRect();
-      const width = Math.max(0, Math.min(272, innerWidth - 16, video.width)); panel.style.width = `${width}px`; panel.style.maxHeight = 'none';
-      const height = panel.offsetHeight;
-      let position;
-      if (document.fullscreenElement?.contains(owner.iframe)) {
-        // There is no area below a fullscreen frame. Keep its controls usable
-        // in a compact bottom dock, never in a separate right-hand column.
-        position = { left: Math.max(8, (innerWidth - width) / 2), top: Math.max(8, innerHeight - height - 8), maxHeight: innerHeight - 16 };
-        panel.dataset.placement = 'fullscreen-dock';
-      } else {
-        position = popoverPosition(anchorFor(video), { width, height }, { width: innerWidth, height: innerHeight }, video);
-        if (reveal && position.maxHeight < height && !scrollPositions.some(item => item.userMoved)) {
-          makeRoom(height); video = owner.iframe.getBoundingClientRect();
-          position = popoverPosition(anchorFor(video), { width, height }, { width: innerWidth, height: innerHeight }, video);
-        }
-        panel.dataset.placement = 'below-video';
-      }
-      panel.style.left = `${position.left}px`; panel.style.top = `${position.top}px`; panel.style.maxHeight = `${Math.max(0, position.maxHeight)}px`;
+      const visual = window.visualViewport;
+      const viewport = { left: visual?.offsetLeft || 0, top: visual?.offsetTop || 0, width: visual?.width || innerWidth, height: visual?.height || innerHeight };
+      const video = owner.iframe.getBoundingClientRect(), width = Math.max(0, Math.min(272, viewport.width - 16, video.width));
+      if (panel.style.width !== `${width}px`) panel.style.width = `${width}px`;
+      const height = panel.scrollHeight + 2;
+      const position = popoverPosition(anchorFor(video), { width, height }, viewport, video);
+      const key = [position.left, position.top, position.maxHeight, position.placement, width].join(':');
+      if (key === positionKey) return;
+      const movedSide = panel.dataset.placement !== position.placement;
+      positionKey = key; panel.dataset.placement = position.placement;
+      panel.style.left = `${position.left}px`; panel.style.top = `${position.top}px`; panel.style.maxHeight = `${position.maxHeight}px`;
+      if (movedSide) panel.scrollTop = 0;
     } finally { positioning = false; }
+  };
+  ref.schedulePosition = () => {
+    if (ref.closed || positionFrame) return;
+    positionFrame = requestAnimationFrame(() => { positionFrame = 0; ref.position(); });
   };
   ref.close = ({ restoreFocus = false } = {}) => {
     if (ref.closed) return;
-    ref.closed = true; abort.abort(); host.remove(); owner.toolbarButton.setAttribute('aria-expanded', 'false');
-    const restore = !owner.disposed && owner.iframe.isConnected ? scrollPositions.filter(p => !p.userMoved && Math.abs(p.element.scrollTop - p.afterTop) <= 1 && Math.abs(p.element.scrollLeft - p.afterLeft) <= 1) : [];
-    spacer?.remove(); for (const p of restore) if (p.element.isConnected) p.element.scrollTo({ top: p.top, left: p.left, behavior: 'instant' });
+    ref.closed = true; abort.abort(); layoutObserver?.disconnect(); contentObserver?.disconnect(); cancelAnimationFrame(positionFrame);
+    host.remove(); owner.toolbarButton.setAttribute('aria-expanded', 'false');
     onClose(ref);
     if (restoreFocus && !owner.disposed) {
       const target = owner.toolbarButton.isConnected && owner.toolbarButton.getBoundingClientRect().width ? owner.toolbarButton : owner.iframe;
@@ -93,7 +89,7 @@ export function createSettingsPopover(owner, { css, version, save, onClose }) {
   const toggleColors = key => {
     expandedColor = expandedColor === key ? undefined : key;
     for (const [name, editor] of editors) { editor.group.hidden = name !== expandedColor; editor.trigger.setAttribute('aria-expanded', String(name === expandedColor)); }
-    ref.position(true);
+    ref.position();
   };
   const presets = [['#ffffff', 'White'], ['#c7cad6', 'Mist'], ['#ffd580', 'Gold'], ['#b7ccff', 'Blue'], ['#b9e6cf', 'Mint'], ['#edbfd5', 'Pink']];
   for (const [prefix, label] of [['source', 'English'], ['target', 'Translation']]) {
@@ -122,13 +118,21 @@ export function createSettingsPopover(owner, { css, version, save, onClose }) {
   shadow.append(style, panel);
   const fullscreen = document.fullscreenElement;
   (fullscreen?.contains(owner.iframe) ? fullscreen : document.body).append(host);
-  owner.toolbarButton.setAttribute('aria-expanded', 'true'); updateFields(); ref.position(true); panel.focus({ preventScroll: true });
+  owner.toolbarButton.setAttribute('aria-expanded', 'true'); updateFields(); ref.position(); panel.focus({ preventScroll: true });
   const inside = event => event.composedPath().includes(host) || event.composedPath().includes(owner.toolbarButton);
   document.addEventListener('pointerdown', event => { if (!inside(event)) ref.close(); }, { capture: true, signal: abort.signal });
   document.addEventListener('focusin', event => { if (!inside(event)) ref.close(); }, { signal: abort.signal });
   window.addEventListener('blur', () => { requestAnimationFrame(() => { if (document.activeElement?.tagName === 'IFRAME') ref.close(); }); }, { signal: abort.signal });
-  window.addEventListener('resize', () => ref.position(), { passive: true, signal: abort.signal });
-  document.addEventListener('scroll', () => ref.position(), { capture: true, passive: true, signal: abort.signal });
+  window.addEventListener('resize', ref.schedulePosition, { passive: true, signal: abort.signal });
+  document.addEventListener('scroll', ref.schedulePosition, { capture: true, passive: true, signal: abort.signal });
+  window.visualViewport?.addEventListener('resize', ref.schedulePosition, { passive: true, signal: abort.signal });
+  window.visualViewport?.addEventListener('scroll', ref.schedulePosition, { passive: true, signal: abort.signal });
+  if (typeof ResizeObserver === 'function') {
+    layoutObserver = new ResizeObserver(ref.schedulePosition);
+    for (const element of [owner.iframe, owner.toolbarButton, panel]) layoutObserver.observe(element);
+  }
+  contentObserver = new MutationObserver(ref.schedulePosition);
+  contentObserver.observe(panel, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['hidden'] });
   const languageName = item => { try { return new Intl.DisplayNames(['en'], { type: 'language' }).of(item.code) || item.code; } catch { return item.code; } };
   void owner.loadInfo(abort.signal).then(info => {
     if (ref.closed) return;

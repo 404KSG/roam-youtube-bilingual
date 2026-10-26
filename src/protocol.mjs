@@ -1,8 +1,8 @@
-export const VERSION = '0.5.0-beta.11';
+export const VERSION = '0.5.0-beta.12';
 export const SERVICE_ID = 'roam-youtube-bilingual';
 export const API_VERSION = 7;
 export const SERVICE_URL = 'http://127.0.0.1:17321';
-export const DEFAULT_CONFIG = { target: 'zh-Hans', sourceFontSize: 16, targetFontSize: 20, sourceColor: '#c7cad6', targetColor: '#ffffff' };
+export const DEFAULT_CONFIG = { target: 'zh-Hans', sourceFontSize: 20, targetFontSize: 18, sourceColor: '#ffffff', targetColor: '#ffffff' };
 export function youtubeLanguage(code) {
   if (!/^[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})*$/.test(code || '')) throw new Error('Invalid subtitle language.');
   const aliases = { 'zh-cn': 'zh-Hans', 'zh-sg': 'zh-Hans', 'zh-tw': 'zh-Hant', 'zh-hk': 'zh-Hant' };
