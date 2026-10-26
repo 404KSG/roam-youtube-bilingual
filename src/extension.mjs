@@ -3,7 +3,7 @@ import { YouTubeClock } from './clock.mjs';
 import { VideoSurface } from './surface.mjs';
 import { claimRenderer, releaseRenderer } from './lifecycle.mjs';
 import { resolveNativeCc } from './native-cc.mjs';
-import { createVideoPreferences } from './preferences.mjs';
+import { createSubtitlePreferences, GLOBAL_PREFERENCES_KEY } from './preferences.mjs';
 import { alignCaptionTracks } from './alignment.mjs';
 import { readingSegments, visibleSegment } from './reading.mjs';
 import { createSettingsPopover } from './settings.mjs';
@@ -13,23 +13,36 @@ const STORAGE_KEY = 'roam-youtube-bilingual/session/v1';
 const commandLabel = 'YouTube subtitles: Settings';
 const fullscreenCommand = 'YouTube subtitles: Fullscreen';
 const videos = new Map();
-let preferences;
+let preferences, preferenceStorage;
 let active = false, observer, scanTimer, surfaceTimer, settings, globalStyle;
 let commandRegistered = false;
 const lifecycle = { active: false, unload: () => onunload() };
 const el = (tag, cls, text) => { const node = document.createElement(tag); if (cls) node.className = cls; if (text !== undefined) node.textContent = text; return node; };
 const button = (text, callback, cls = '') => { const node = el('button', cls, text); node.type = 'button'; node.addEventListener('click', callback); return node; };
-async function saveConfig(owner, patch) {
-  const oldTarget = owner.config.target;
-  const result = preferences.set(owner.videoId, patch);
-  for (const video of videos.values()) if (video.videoId === owner.videoId) {
-    video.config = validateConfig(result.preferences); video.wantsEnabled = result.preferences.enabled;
-    video.preferenceError = result.saved ? '' : 'Settings could not be saved on this device.';
+async function applyGlobalPreferences(next, { activate, saved = true } = {}) {
+  let restart;
+  for (const video of videos.values()) {
+    const targetChanged = video.config.target !== next.target, switchedOn = !video.wantsEnabled && next.enabled;
+    if (targetChanged && video.enabled) { video.turnOff(); restart = video; }
+    video.config = validateConfig(next); video.wantsEnabled = next.enabled;
+    video.preferenceError = saved ? '' : 'Global settings could not be saved on this device.';
+    video.preferenceNotice = preferences.notice;
     if (!video.wantsEnabled) video.turnOff();
+    else if (targetChanged || switchedOn) { video.restoreAttempted = false; video.lastError = ''; }
     video.updateIcon(); video.updatePair();
   }
-  if (owner.wantsEnabled && (patch.enabled === true || oldTarget !== owner.config.target)) await owner.changeTarget();
+  settings?.refresh?.();
+  const candidate = activate || restart;
+  if (candidate?.wantsEnabled && !candidate.disposed) await candidate.turnOn();
+}
+async function saveConfig(owner, patch) {
+  const result = preferences.set(patch);
+  await applyGlobalPreferences(result.preferences, { activate: patch.enabled === true ? owner : undefined, saved: result.saved });
   if (owner.preferenceError) owner.notice(owner.preferenceError);
+}
+function syncStoredPreferences(event) {
+  if (!active || (event.key !== GLOBAL_PREFERENCES_KEY && event.key !== null) || (event.storageArea && event.storageArea !== preferenceStorage)) return;
+  void applyGlobalPreferences(preferences.refresh());
 }
 async function request(path, body, signal, observation) {
   let response;
@@ -77,6 +90,7 @@ class VideoCaptions {
   constructor(iframe) {
     this.iframe = iframe; this.videoId = videoIdFromUrl(iframe.src); this.embedId = this.videoId;
     const saved = preferences.get(this.videoId); this.config = validateConfig(saved); this.wantsEnabled = saved.enabled; this.restoreAttempted = false;
+    this.preferenceError = preferences.saveWarning; this.preferenceNotice = preferences.notice;
     this.tracks = new Map(); this.time = 0; this.epoch = 0; this.enabled = false; this.loading = false; this.ccState = 'unknown'; this.ccVerifiedAt = 0; this.nativeWasOn = null; this.nativeChanged = false;
     this.surface = new VideoSurface(iframe, STYLE); this.surface.host.dataset.version = VERSION;
     this.box = el('div', 'ryb-caption-box'); this.box.hidden = true; this.box.setAttribute('aria-label', 'Bilingual subtitles');
@@ -185,6 +199,7 @@ class VideoCaptions {
   videoChanged(id) {
     this.cancelInfo(); this.closeNativeGate(); this.turnOff(); this.videoId = id; this.info = null; this.tracks.clear(); this.alignment = null;
     const saved = preferences.get(id); this.config = validateConfig(saved); this.wantsEnabled = saved.enabled;
+    this.preferenceError = preferences.saveWarning; this.preferenceNotice = preferences.notice;
     this.restoreAttempted = false; this.lastPlayerState = -1; this.lastError = ''; this.updateIcon();
   }
   restoreIfNeeded(playbackStarted = false) {
@@ -349,7 +364,13 @@ function onload() {
     if (legacy?.target) defaults.target = validateConfig({ target: legacy.target }).target;
   } catch { /* Keep a legacy language preference, but use the current appearance defaults. */ }
   try { storage = window.localStorage; } catch { /* Report unavailable persistence when a choice is saved. */ }
-  preferences = createVideoPreferences(storage, defaults);
+  preferenceStorage = storage; preferences = createSubtitlePreferences(storage, defaults);
+  const visible = [...document.querySelectorAll('iframe[src]')].find(iframe => {
+    const rect = iframe.getBoundingClientRect();
+    return videoIdFromUrl(iframe.src) && rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth;
+  });
+  preferences.get(visible ? videoIdFromUrl(visible.src) : undefined);
+  window.addEventListener('storage', syncStoredPreferences);
   globalStyle = el('style'); globalStyle.dataset.rybToolbar = 'true'; globalStyle.textContent = '.ryb-toolbar-button{width:30px!important;min-width:30px!important;height:30px!important;padding:6px!important;display:inline-flex!important;align-items:center;justify-content:center;background:transparent;border:0;border-radius:3px;color:#607789;cursor:pointer}.ryb-toolbar-button:hover{background:#6077891c}.ryb-toolbar-button[data-active="true"]{color:#2378b5;background:#2378b512}.ryb-toolbar-button .bp3-icon{font-size:18px;line-height:1;pointer-events:none}.ryb-toolbar-button[data-active="true"] .bp3-icon{color:#2378b5!important}.ryb-toolbar-button[data-layout="inline"]{width:24px!important;min-width:24px!important;height:24px!important;min-height:24px!important;padding:4px!important}.ryb-toolbar-button[data-layout="inline"] .bp3-icon{font-size:16px;font-family:Icons16!important}.rm-video-player__spacing-wrapper:not(:hover) .rm-video-player__gutter:not(:focus-within) .ryb-toolbar-button{display:none!important}.ryb-toolbar-fallback{display:flex;justify-content:flex-end;min-height:30px}.ryb-toolbar-button:focus-visible{outline:2px solid #2378b5;outline-offset:2px}'; document.head.append(globalStyle);
   observer = new MutationObserver((records) => {
     if (records.every((record) => record.target instanceof Element && record.target.closest('.ryb-surface-host,.ryb-settings-host,.ryb-toolbar-button'))) return;
@@ -365,7 +386,7 @@ function onload() {
   scan(); return true;
 }
 function onunload() {
-  active = false; observer?.disconnect(); observer = null; clearTimeout(scanTimer); scanTimer = null; clearInterval(surfaceTimer); surfaceTimer = null;
+  active = false; window.removeEventListener('storage', syncStoredPreferences); preferenceStorage = null; observer?.disconnect(); observer = null; clearTimeout(scanTimer); scanTimer = null; clearInterval(surfaceTimer); surfaceTimer = null;
   closeSettings(); for (const video of videos.values()) video.destroy(); videos.clear(); globalStyle?.remove(); globalStyle = null;
   if (commandRegistered) { window.roamAlphaAPI?.ui?.commandPalette?.removeCommand({ label: commandLabel }); window.roamAlphaAPI?.ui?.commandPalette?.removeCommand({ label: fullscreenCommand }); }
   commandRegistered = false; releaseRenderer(window, lifecycle);

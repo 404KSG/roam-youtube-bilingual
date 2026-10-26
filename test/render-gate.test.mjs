@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { activeCueIndex } from '../src/core.mjs';
 import { singleLine, validateConfig } from '../src/protocol.mjs';
-import { createVideoPreferences } from '../src/preferences.mjs';
+import { createSubtitlePreferences } from '../src/preferences.mjs';
 import { alignCaptionTracks } from '../src/alignment.mjs';
 import { readingSegments, visibleSegment } from '../src/reading.mjs';
 import { resolveNativeCc } from '../src/native-cc.mjs';
@@ -14,7 +14,7 @@ const source = await readFile(new URL('../src/extension.mjs', import.meta.url), 
 const controller = source.slice(source.indexOf('class VideoCaptions {'), source.indexOf('\nfunction scan()'));
 function harness({ request = async () => ({ ok: true }), now = Date.now } = {}) {
   const commands = [], videos = new Map();
-  const context = { videos, preferences: createVideoPreferences(null), validateConfig, AbortController, DOMException, clearTimeout, activeCueIndex, singleLine, alignCaptionTracks, readingSegments, visibleSegment, resolveNativeCc, Date: { now }, settings: null, document: { hidden: false },
+  const context = { videos, preferences: createSubtitlePreferences(null), validateConfig, AbortController, DOMException, clearTimeout, activeCueIndex, singleLine, alignCaptionTracks, readingSegments, visibleSegment, resolveNativeCc, Date: { now }, settings: null, document: { hidden: false },
     verifyHealth: data => data, request };
   const Controller = vm.runInNewContext(`${controller}; VideoCaptions`, context);
   const video = Object.create(Controller.prototype);

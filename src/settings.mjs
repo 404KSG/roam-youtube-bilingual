@@ -67,23 +67,29 @@ export function createSettingsPopover(owner, { css, version, save, onClose }) {
       target.focus({ preventScroll: true });
     }
   };
-  const heading = node('div', 'ryb-heading'), title = node('h2', '', 'Subtitles'); title.title = 'Up to two lines per language. Changes are saved for this video.';
+  const heading = node('div', 'ryb-heading'), title = node('h2', '', 'Subtitles'); title.title = 'Up to two lines per language. Settings apply to all videos on this device.';
   const enabled = node('input', 'ryb-switch'); enabled.type = 'checkbox'; enabled.setAttribute('role', 'switch'); enabled.setAttribute('aria-label', 'Enable bilingual subtitles'); enabled.checked = owner.wantsEnabled;
   const headingActions = node('div', 'ryb-heading-actions'); headingActions.append(enabled, action('×', 'Close subtitle settings', () => ref.close({ restoreFocus: true }), 'ryb-close'));
   heading.append(title, headingActions); panel.append(heading);
   const languageRow = node('label', 'ryb-language-row'), language = node('select'); language.name = 'target'; language.setAttribute('aria-label', 'Translation language'); language.disabled = true;
   language.append(node('option', '', 'Loading languages…')); languageRow.append(node('span', '', 'Language'), language); panel.append(languageRow);
   const status = ref.status = node('p', 'ryb-status'); status.setAttribute('role', 'status');
-  const versionLabel = node('span', 'ryb-version', `Version ${version}`); versionLabel.title = 'Changes are saved for this video.';
+  const versionLabel = node('span', 'ryb-version', `Version ${version}`); versionLabel.title = 'Global settings on this device.';
   const updateFields = () => {
     enabled.checked = owner.wantsEnabled;
     for (const [key, field] of fields) if (document.activeElement !== host || shadow.activeElement !== field) field.value = String(owner.config[key]);
     for (const [key, buttons] of swatches) for (const button of buttons) button.setAttribute('aria-pressed', String(button.dataset.color === owner.config[key]));
     for (const [key, editor] of editors) editor.trigger.style.setProperty('--swatch', owner.config[key]);
-    status.textContent = owner.loading ? owner.noticeBox.textContent || 'Preparing subtitles…' : owner.lastError || owner.preferenceError || '';
+    status.textContent = owner.loading ? owner.noticeBox.textContent || 'Preparing subtitles…' : owner.lastError || owner.preferenceError || owner.preferenceNotice || '';
+  };
+  ref.refresh = () => {
+    if (ref.closed) return;
+    updateFields();
+    if (!language.disabled) { language.value = owner.config.target; if (!language.value) language.selectedIndex = -1; }
+    ref.position();
   };
   const commit = async patch => {
-    try { const pending = save(patch); updateFields(); await pending; if (!ref.closed) { updateFields(); versionLabel.title = owner.preferenceError || 'Saved for this video'; ref.position(); } }
+    try { const pending = save(patch); updateFields(); await pending; if (!ref.closed) { ref.refresh(); versionLabel.title = owner.preferenceError || 'Saved for all videos on this device'; } }
     catch (error) { if (!ref.closed) { status.textContent = error.message; ref.position(); } }
   };
   const toggleColors = key => {
@@ -110,6 +116,7 @@ export function createSettingsPopover(owner, { css, version, save, onClose }) {
     colorInput.addEventListener('input', () => { const color = colorInput.value.startsWith('#') ? colorInput.value : '#' + colorInput.value; if (/^#[a-fA-F0-9]{6}$/.test(color)) void commit({ [colorKey]: color }); });
     colorInput.addEventListener('change', () => { colorInput.value = owner.config[colorKey]; }); colors.append(colorInput); section.append(colors); panel.append(section);
   }
+  for (const field of fields.values()) field.addEventListener('blur', () => { if (!ref.closed) updateFields(); });
   panel.append(status);
   const footer = node('div', 'ryb-settings-footer'); footer.append(versionLabel, action('Reset style', 'Reset subtitle appearance', () => { const { sourceFontSize, targetFontSize, sourceColor, targetColor } = DEFAULT_CONFIG; void commit({ sourceFontSize, targetFontSize, sourceColor, targetColor }); }, 'ryb-text-button')); panel.append(footer);
   enabled.addEventListener('change', () => { void commit({ enabled: enabled.checked }); });
@@ -143,7 +150,7 @@ export function createSettingsPopover(owner, { css, version, save, onClose }) {
     }
     language.value = owner.config.target; language.disabled = !info.languages.length;
     if (!language.value) { language.selectedIndex = -1; status.textContent = 'Choose an available translation language.'; }
-    if (!info.sourceLanguage) { enabled.disabled = true; status.textContent = 'This video has no available English captions.'; }
+    if (!info.sourceLanguage) status.textContent = 'This video has no available English captions. Global settings are unchanged.';
     ref.position();
   }).catch(error => { if (!ref.closed && error.name !== 'AbortError') { status.textContent = error.message; ref.position(); } });
   return ref;

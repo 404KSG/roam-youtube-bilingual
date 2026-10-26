@@ -15,7 +15,7 @@ export async function runUnifiedAcceptance(options = {}) {
   const plugin = window.roamYouTubeBilingual;
   plugin.onunload();
   const frame = document.querySelector('iframe');
-  const preferenceKeys = ['roam-youtube-bilingual/video/v1/M7lc1UVf-VE', 'roam-youtube-bilingual/video/v2/M7lc1UVf-VE'];
+  const preferenceKeys = ['roam-youtube-bilingual/global/v1', 'roam-youtube-bilingual/video/v1/M7lc1UVf-VE', 'roam-youtube-bilingual/video/v2/M7lc1UVf-VE'];
   const preferenceBefore = preferenceKeys.map(key => localStorage.getItem(key));
   const legacyKey = 'roam-youtube-bilingual/session/v1', legacyBefore = sessionStorage.getItem(legacyKey);
   preferenceKeys.forEach(key => localStorage.removeItem(key));

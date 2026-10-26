@@ -2,7 +2,7 @@
 export async function runToolbarColorAcceptance(blueprintCss) {
   if (location.pathname !== '/test-fixture' || !blueprintCss.includes('.bp3-button:not(')) throw new Error('Owned fixture and Blueprint CSS required.');
   const plugin = window.roamYouTubeBilingual;
-  const keys = ['roam-youtube-bilingual/video/v1/M7lc1UVf-VE', 'roam-youtube-bilingual/video/v2/M7lc1UVf-VE'];
+  const keys = ['roam-youtube-bilingual/global/v1', 'roam-youtube-bilingual/video/v1/M7lc1UVf-VE', 'roam-youtube-bilingual/video/v2/M7lc1UVf-VE'];
   const saved = keys.map(key => localStorage.getItem(key)), wasDark = document.body.classList.contains('bp3-dark');
   plugin.onunload(); keys.forEach(key => localStorage.removeItem(key));
   const hostStyle = document.createElement('style'); hostStyle.textContent = blueprintCss; document.head.append(hostStyle);

@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateConfig } from '../src/protocol.mjs';
-import { createVideoPreferences } from '../src/preferences.mjs';
+import { createSubtitlePreferences } from '../src/preferences.mjs';
 
 test('new subtitle preferences default to white English at 20 px and white translation at 18 px', () => {
   assert.deepEqual(validateConfig(), { target: 'zh-Hans', sourceFontSize: 20, targetFontSize: 18, sourceColor: '#ffffff', targetColor: '#ffffff' });
   const storage = { getItem: () => null, setItem() {} };
-  const prefs = createVideoPreferences(storage).get('vif8NQcjVf0');
+  const prefs = createSubtitlePreferences(storage).get('vif8NQcjVf0');
   assert.equal(prefs.sourceFontSize, 20); assert.equal(prefs.targetFontSize, 18);
   assert.equal(prefs.sourceColor, '#ffffff'); assert.equal(prefs.targetColor, '#ffffff');
 });
@@ -21,10 +21,10 @@ test('upgrading preserves the previous ON choice and saves independent styles wi
   const id = 'vif8NQcjVf0', oldKey = 'roam-youtube-bilingual/video/v1/' + id;
   const previous = JSON.stringify({ version: 1, enabled: true, target: 'zh-Hans', fontSize: 15 });
   const data = new Map([[oldKey, previous]]), storage = { getItem: key => data.get(key) ?? null, setItem: (key, value) => data.set(key, value) };
-  const store = createVideoPreferences(storage), migrated = store.get(id);
+  const store = createSubtitlePreferences(storage), migrated = store.get(id);
   assert.equal(migrated.enabled, true); assert.equal(migrated.sourceFontSize, 15); assert.equal(migrated.targetFontSize, 15);
-  store.set(id, { sourceFontSize: 13, targetFontSize: 19, targetColor: '#ffd580' });
-  const restored = createVideoPreferences(storage).get(id);
+  store.set({ sourceFontSize: 13, targetFontSize: 19, targetColor: '#ffd580' });
+  const restored = createSubtitlePreferences(storage).get(id);
   assert.equal(restored.enabled, true); assert.equal(restored.sourceFontSize, 13); assert.equal(restored.targetFontSize, 19); assert.equal(restored.targetColor, '#ffd580');
   assert.equal(data.get(oldKey), previous);
 });

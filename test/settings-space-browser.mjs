@@ -3,7 +3,7 @@ export async function runSettingsSpaceAcceptance() {
   if (location.pathname !== '/test-fixture') throw new Error('Owned fixture only.');
   const plugin = window.roamYouTubeBilingual, fixture = document.querySelector('.fixture'), frame = document.querySelector('iframe'), originalFetch = window.fetch;
   const style = fixture.getAttribute('style'), bodyStyle = document.body.getAttribute('style'), scroll = window.scrollY;
-  const keys = ['roam-youtube-bilingual/video/v1/M7lc1UVf-VE', 'roam-youtube-bilingual/video/v2/M7lc1UVf-VE'], values = keys.map(key => localStorage.getItem(key));
+  const keys = ['roam-youtube-bilingual/global/v1', 'roam-youtube-bilingual/video/v1/M7lc1UVf-VE', 'roam-youtube-bilingual/video/v2/M7lc1UVf-VE'], values = keys.map(key => localStorage.getItem(key));
   plugin.onunload(); keys.forEach(key => localStorage.removeItem(key));
   window.fetch = async (_url, options = {}) => new Response(JSON.stringify({ videoId: JSON.parse(options.body || '{}').videoId, sourceLanguage: 'en', languages: [{ code: 'zh-Hans' }] }), { headers: { 'Content-Type': 'application/json' } });
   const results = {}, check = (ok, name) => { if (!ok) throw new Error(name); results[name] = true; };

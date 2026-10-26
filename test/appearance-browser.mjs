@@ -1,7 +1,7 @@
 export async function runAppearanceAcceptance({ apiVersion = 7 } = {}) {
   if (location.pathname !== '/test-fixture') throw new Error('Owned fixture only.');
   const plugin = window.roamYouTubeBilingual, originalFetch = window.fetch, frame = document.querySelector('iframe');
-  const keys = ['roam-youtube-bilingual/video/v1/M7lc1UVf-VE', 'roam-youtube-bilingual/video/v2/M7lc1UVf-VE'];
+  const keys = ['roam-youtube-bilingual/global/v1', 'roam-youtube-bilingual/video/v1/M7lc1UVf-VE', 'roam-youtube-bilingual/video/v2/M7lc1UVf-VE'];
   const before = keys.map(key => localStorage.getItem(key)), hidden = Object.getOwnPropertyDescriptor(document, 'hidden');
   const originalWidth = document.querySelector('.fixture').style.width;
   const results = {}, check = (ok, name) => { if (!ok) throw new Error(name); results[name] = true; };

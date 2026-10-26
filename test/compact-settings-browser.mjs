@@ -2,7 +2,7 @@ export async function runCompactSettingsAcceptance() {
   if (location.pathname !== '/test-fixture') throw new Error('Owned fixture only.');
   const plugin = window.roamYouTubeBilingual, oldFetch = window.fetch, fixture = document.querySelector('.fixture'), frame = document.querySelector('iframe');
   const oldWidth = fixture.style.width;
-  const keys = ['roam-youtube-bilingual/video/v1/M7lc1UVf-VE', 'roam-youtube-bilingual/video/v2/M7lc1UVf-VE'], oldValues = keys.map(key => localStorage.getItem(key));
+  const keys = ['roam-youtube-bilingual/global/v1', 'roam-youtube-bilingual/video/v1/M7lc1UVf-VE', 'roam-youtube-bilingual/video/v2/M7lc1UVf-VE'], oldValues = keys.map(key => localStorage.getItem(key));
   const results = {}, check = (ok, name) => { if (!ok) throw new Error(name); results[name] = true; };
   const root = () => document.querySelector('.ryb-settings-host')?.shadowRoot;
   const wait = async condition => { const end = performance.now() + 5000; while (!condition()) { if (performance.now() > end) throw new Error('Compact settings timeout'); await new Promise(resolve => setTimeout(resolve, 25)); } };
@@ -27,7 +27,7 @@ export async function runCompactSettingsAcceptance() {
     document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, composed: true }));
     check(!root() && !document.querySelector('.ryb-settings-spacer'), 'outside dismissal removes the card and any temporary layout space');
     document.querySelector('.ryb-toolbar-button').click(); await wait(() => !root().querySelector('select').disabled);
-    check(root().querySelector('[name=sourceFontSize]').value === '14' && root().querySelector('[name=targetColor]').value === '#ffd580', 'compact controls still save independent appearance choices');
+    check(root().querySelector('[name=sourceFontSize]').value === '14' && root().querySelector('[name=targetColor]').value === '#ffd580', 'compact controls still save independent global appearance choices');
     check([...root().querySelectorAll('.ryb-colors')].every(group => group.hidden), 'reopening starts compact without losing saved colors');
     return results;
   } finally {

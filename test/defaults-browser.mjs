@@ -1,7 +1,7 @@
 export async function runDefaultSettingsAcceptance() {
   if (location.pathname !== '/test-fixture') throw new Error('Owned fixture only.');
   const plugin = window.roamYouTubeBilingual, originalFetch = window.fetch;
-  const keys = ['roam-youtube-bilingual/video/v1/M7lc1UVf-VE', 'roam-youtube-bilingual/video/v2/M7lc1UVf-VE'], originals = keys.map(key => localStorage.getItem(key));
+  const keys = ['roam-youtube-bilingual/global/v1', 'roam-youtube-bilingual/video/v1/M7lc1UVf-VE', 'roam-youtube-bilingual/video/v2/M7lc1UVf-VE'], originals = keys.map(key => localStorage.getItem(key));
   const legacyKey = 'roam-youtube-bilingual/session/v1', legacy = sessionStorage.getItem(legacyKey);
   const root = () => document.querySelector('.ryb-settings-host')?.shadowRoot;
   const wait = async condition => { const end = performance.now() + 5000; while (!condition()) { if (performance.now() > end) throw new Error('Defaults fixture timeout'); await new Promise(resolve => setTimeout(resolve, 25)); } };
@@ -20,7 +20,7 @@ export async function runDefaultSettingsAcceptance() {
     const font = root().querySelector('[name=sourceFontSize]'); font.value = '24'; font.dispatchEvent(new Event('input'));
     root().querySelector('[aria-label="English text color"]').click(); root().querySelector('[aria-label="English color: Blue"]').click();
     close(); await open();
-    check(read('sourceFontSize') === '24' && read('sourceColor') === '#b7ccff', 'explicit per-video choices remain intact after reopening');
+    check(read('sourceFontSize') === '24' && read('sourceColor') === '#b7ccff', 'explicit global choices remain intact after reopening');
     root().querySelector('[aria-label="Reset subtitle appearance"]').click();
     await wait(() => read('sourceFontSize') === '20' && read('targetFontSize') === '18');
     check(read('sourceColor') === '#ffffff' && read('targetColor') === '#ffffff' && read('target') === 'ja', 'Reset style restores the new white 20/18 defaults without changing language');
