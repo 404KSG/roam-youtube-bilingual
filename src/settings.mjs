@@ -67,7 +67,7 @@ export function createSettingsPopover(owner, { css, version, save, onClose }) {
       target.focus({ preventScroll: true });
     }
   };
-  const heading = node('div', 'ryb-heading'), title = node('h2', '', 'Subtitles'); title.title = 'Up to two lines per language. Settings apply to all videos on this device.';
+  const heading = node('div', 'ryb-heading'), title = node('h2', '', 'Global subtitles'); title.title = 'Up to two lines per language. Settings apply to all videos on this device.';
   const enabled = node('input', 'ryb-switch'); enabled.type = 'checkbox'; enabled.setAttribute('role', 'switch'); enabled.setAttribute('aria-label', 'Enable bilingual subtitles'); enabled.checked = owner.wantsEnabled;
   const headingActions = node('div', 'ryb-heading-actions'); headingActions.append(enabled, action('×', 'Close subtitle settings', () => ref.close({ restoreFocus: true }), 'ryb-close'));
   heading.append(title, headingActions); panel.append(heading);

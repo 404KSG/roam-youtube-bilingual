@@ -69,7 +69,7 @@ export async function runUnifiedAcceptance(options = {}) {
     await wait(() => setting()?.querySelector('select').disabled === false);
     const fields = [...setting().querySelectorAll('input,select')];
     assert(fields.length === 6 && fields.some(field => field.type === 'checkbox') && ['target', 'sourceFontSize', 'targetFontSize', 'sourceColor', 'targetColor'].every(name => fields.some(field => field.name === name)), 'settings contain enable, language and independent appearance controls without API fields');
-    assert(setting().querySelector('h2').textContent === 'Subtitles' && !/[\u4e00-\u9fff]/.test(setting().querySelector('[role=dialog]').textContent), 'all settings labels and language names are English');
+    assert(setting().querySelector('h2').textContent === 'Global subtitles' && !/[\u4e00-\u9fff]/.test(setting().querySelector('[role=dialog]').textContent), 'all settings labels and language names are English');
     assert([...setting().querySelector('select').options].map((option) => option.value).includes('ja'), 'language choices come from video metadata');
     setting().querySelector('input[type=checkbox]').checked = true;
     setting().querySelector('input[type=checkbox]').dispatchEvent(new Event('change'));
