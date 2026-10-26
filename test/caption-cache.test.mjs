@@ -15,6 +15,21 @@ test('caption cache survives a helper restart without retaining extra fields', a
   const raw = await readFile(join(dir, `${id}.zh-Hans.json`), 'utf8');
   assert.doesNotMatch(raw, /DO_NOT_STORE|token/);
 });
+test('named English tracks and translated aliases survive cache round trips and remain bounded', async t => {
+  const dir = await directory(t), cache = createCaptionCache(dir, { maxEntries: 2 });
+  for (const key of ['en-ehkg1hFWq8A', 'zh-Hans-en-ehkg1hFWq8A']) {
+    assert.equal(await cache.put(id, key, cues), true);
+    assert.equal((await createCaptionCache(dir).get(id, key))[0].text, 'Caption text');
+  }
+  await cache.put(id, 'ja', cues);
+  assert.equal((await readdir(dir)).filter(name => name.endsWith('.json')).length, 2);
+});
+test('opaque track keys still reject path and pattern injection', async t => {
+  const cache = createCaptionCache(await directory(t));
+  for (const key of ['../en', 'en/../../private', 'en-..', 'en%2Fprivate', 'en|ja', 'en.*', 'en-' + 'a'.repeat(129)]) {
+    await assert.rejects(cache.get(id, key), /Invalid caption cache key/);
+  }
+});
 test('old ASR-derived caches and a different English source binding cannot masquerade as same-source captions', async t => {
   const dir = await directory(t), cache = createCaptionCache(dir);
   await writeFile(join(dir, `${id}.zh-Hans.json`), JSON.stringify({ schema: 1, source: 'youtube', videoId: id, language: 'zh-Hans', savedAt: Date.now(), cues }));
