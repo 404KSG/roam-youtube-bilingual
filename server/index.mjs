@@ -81,6 +81,7 @@ export function makeServer({ port = 17321, captionFetcher, captionBatchFetcher =
       ['/', ['demo/roam-layout.html', 'text/html']], ['/demo', ['demo/roam-layout.html', 'text/html']], ['/roam-layout', ['demo/roam-layout.html', 'text/html']],
       ['/extension.js', ['extension.js', 'text/javascript']], ['/roam-youtube-bilingual.js', ['dist/roam-youtube-bilingual.js', 'text/javascript']],
       ['/test-fixture', ['test/unified-fixture.html', 'text/html']],
+      ['/test-preview-fixture', ['test/preview-fixture.html', 'text/html']],
     ]);
     if (req.method === 'GET' && assets.has(path)) {
       const [file, type] = assets.get(path);

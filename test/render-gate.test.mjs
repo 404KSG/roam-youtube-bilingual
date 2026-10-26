@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { activeCueIndex } from '../src/core.mjs';
-import { singleLine } from '../src/protocol.mjs';
+import { singleLine, validateConfig } from '../src/protocol.mjs';
+import { createVideoPreferences } from '../src/preferences.mjs';
+import { alignCaptionTracks } from '../src/alignment.mjs';
 import { resolveNativeCc } from '../src/native-cc.mjs';
 
 // Exercise the real controller methods without constructing browser DOM.
@@ -11,11 +13,11 @@ const source = await readFile(new URL('../src/extension.mjs', import.meta.url), 
 const controller = source.slice(source.indexOf('class VideoCaptions {'), source.indexOf('\nfunction scan()'));
 function harness({ request = async () => ({ ok: true }), now = Date.now } = {}) {
   const commands = [], videos = new Map();
-  const context = { videos, config: { target: 'zh-Hans' }, AbortController, DOMException, clearTimeout, activeCueIndex, singleLine, resolveNativeCc, Date: { now }, settings: null, document: { hidden: false },
+  const context = { videos, preferences: createVideoPreferences(null), validateConfig, AbortController, DOMException, clearTimeout, activeCueIndex, singleLine, alignCaptionTracks, resolveNativeCc, Date: { now }, settings: null, document: { hidden: false },
     verifyHealth: data => data, request };
   const Controller = vm.runInNewContext(`${controller}; VideoCaptions`, context);
   const video = Object.create(Controller.prototype);
-  Object.assign(video, { enabled: false, loading: false, disposed: false, epoch: 0, videoId: 'vif8NQcjVf0',
+  Object.assign(video, { enabled: false, wantsEnabled: false, config: { target: 'zh-Hans', fontSize: 20 }, loading: false, disposed: false, epoch: 0, videoId: 'vif8NQcjVf0',
     tracks: new Map(), box: { hidden: false }, source: { textContent: 'English' }, target: { textContent: '中文' }, noticeBox: {},
     clock: { unloadCaptions: () => commands.push('off'), restoreCaptions: () => { assert.equal(video.box.hidden, true); commands.push('restore'); } },
     updateIcon() {}, notice(message) { this.lastNotice = message; },
@@ -35,6 +37,15 @@ test('a failed target download never disables existing native captions', async (
   assert.equal(video.lastError, 'YouTube 429');
 });
 
+test('a failed restoration keeps the saved ON choice without automatic retries', async () => {
+  const { video } = harness(); let attempts = 0;
+  video.wantsEnabled = true; video.loadTrack = async () => { attempts++; throw new Error('YouTube 429'); };
+  await video.turnOn();
+  video.restoreIfNeeded(); video.restoreIfNeeded(true);
+  assert.equal(video.wantsEnabled, true); assert.equal(video.restoreAttempted, true); assert.equal(attempts, 1);
+  assert.equal(video.config.target, 'zh-Hans');
+});
+
 test('closing the render gate is side-effect-free for native CC, even while disabled', () => {
   const { video, commands } = harness();
   video.ccState = 'off'; video.closeNativeGate(); video.turnOff();
@@ -50,16 +61,25 @@ test('native CC restoration happens only after the custom overlay is hidden', ()
   assert.deepEqual(commands, ['restore']);
 });
 
-test('English and translated cues use their own independent time boundaries', () => {
+test('English-led grouping does not carry translation from an earlier source segment', () => {
   const { video } = harness();
   Object.assign(video, { enabled: true, ccState: 'off', ccVerifiedAt: Date.now(), time: 5, info: { sourceLanguage: 'en' } });
   video.clock.isSynchronized = () => true;
-  video.tracks.set('en', [{ start: 0, end: 10, text: 'English sentence' }]);
+  video.tracks.set('en', [{ start: 0, end: 2, text: 'Earlier English' }, { start: 2, end: 10, text: 'English sentence' }]);
   video.tracks.set('zh-Hans', [{ start: 0, end: 2, text: '已过期' }, { start: 2, end: 10, text: '当前译文' }]);
   video.drawPair = () => {};
   video.updatePair();
   assert.equal(video.pair.source, 'English sentence');
   assert.equal(video.pair.target, '当前译文');
+});
+
+test('the displayed Chinese paragraph stays fixed while the English segment stays fixed', () => {
+  const { video } = harness();
+  Object.assign(video, { enabled: true, ccState: 'off', ccVerifiedAt: Date.now(), info: { sourceLanguage: 'en' } });
+  video.clock.isSynchronized = () => true; video.drawPair = () => {};
+  video.tracks.set('en', [{ start: 0, end: 4, text: 'One English segment' }]);
+  video.tracks.set('zh-Hans', [{ start: 0, end: 1, text: '完整的' }, { start: 1, end: 4, text: '中文段落。' }]);
+  for (const time of [.5, 1.5, 3.5]) { video.time = time; video.updatePair(); assert.equal(video.pair.target, '完整的中文段落。'); }
 });
 
 test('the last metadata subscriber cancels the underlying request', async () => {

@@ -15,6 +15,9 @@ export async function runUnifiedAcceptance(options = {}) {
   const plugin = window.roamYouTubeBilingual;
   plugin.onunload();
   const frame = document.querySelector('iframe');
+  const preferenceKey = 'roam-youtube-bilingual/video/v1/M7lc1UVf-VE', preferenceBefore = localStorage.getItem(preferenceKey);
+  const legacyKey = 'roam-youtube-bilingual/session/v1', legacyBefore = sessionStorage.getItem(legacyKey);
+  localStorage.removeItem(preferenceKey);
   const before = frame.getBoundingClientRect().toJSON();
   const originalFetch = window.fetch;
   const source = 'This English sentence\nwas previously wrapped onto two lines.';
@@ -27,7 +30,12 @@ export async function runUnifiedAcceptance(options = {}) {
     let data;
     if (path.endsWith('/health')) data = { ok: true, service: 'roam-youtube-bilingual', apiVersion: 6, provider: 'youtube-unified' };
     else if (path.endsWith('/video-info')) data = { videoId: body.videoId, title: 'Fixture video', sourceLanguage: 'en', languages: [{ code: 'en', name: 'English' }, { code: 'zh-Hans', name: 'Chinese' }, { code: 'ja', name: 'Japanese' }, { code: 'fr', name: 'French' }] };
-    else if (path.endsWith('/captions')) data = { videoId: body.videoId, language: body.target, cues: [{ id: 0, start: 0, end: 100, text: body.target === 'en' ? source : (targets[body.target] || targets['zh-Hans']).join('') }] };
+    else if (path.endsWith('/captions')) {
+      const parts = targets[body.target] || targets['zh-Hans'];
+      data = { videoId: body.videoId, language: body.target, cues: body.target === 'en'
+        ? [{ start: 0, end: 4, text: source }, { start: 4, end: 8, text: 'Next English segment.' }]
+        : [{ start: 0, end: 2, text: parts[0] }, { start: 2, end: 4, text: parts[1] }, { start: 4, end: 8, text: '下一段译文。' }] };
+    }
     else if (path.endsWith('/native-cc-state')) {
       data = { videoId: body.videoId, state: ccState, reason: ccReason, checkedAt: Date.now() };
       if (hold) return new Promise((resolve) => { releaseLate = () => resolve(new Response(JSON.stringify({ ...data, state: 'off' }))); });
@@ -42,6 +50,8 @@ export async function runUnifiedAcceptance(options = {}) {
   let held = false;
   const cleanup = () => {
     window.fetch = originalFetch; plugin.onunload();
+    if (preferenceBefore === null) localStorage.removeItem(preferenceKey); else localStorage.setItem(preferenceKey, preferenceBefore);
+    if (legacyBefore === null) sessionStorage.removeItem(legacyKey); else sessionStorage.setItem(legacyKey, legacyBefore);
     if (hiddenDescriptor) Object.defineProperty(document, 'hidden', hiddenDescriptor); else delete document.hidden;
     delete window.__unifiedFixtureCleanup;
   };
@@ -68,7 +78,13 @@ export async function runUnifiedAcceptance(options = {}) {
     done();
     await wait(() => !root().querySelector('.ryb-caption-box').hidden);
     const box = root().querySelector('.ryb-caption-box'), a = root().querySelector('.ryb-source'), b = root().querySelector('.ryb-target');
-    assert(a.textContent === source.replace(/\n/g, ' ') && b.textContent === '第一行中文第二行中文', 'both former multiline texts are flattened without loss');
+    assert(a.textContent === source.replace(/\n/g, ' ') && b.textContent === '第一行中文第二行中文', 'English is flattened and Chinese fragments form one complete segment');
+    clock(3);
+    assert(b.textContent === '第一行中文第二行中文', 'Chinese stays stable through its former fragment boundary');
+    clock(4.5);
+    assert(a.textContent === 'Next English segment.' && b.textContent === '下一段译文。', 'a forward seek updates both rows to the next English segment');
+    clock(1);
+    assert(a.textContent === source.replace(/\n/g, ' ') && b.textContent === '第一行中文第二行中文', 'a backward seek restores the previous complete bilingual segment');
     assert(box.children.length === 2 && getComputedStyle(a).whiteSpace === 'nowrap' && getComputedStyle(b).whiteSpace === 'nowrap', 'exactly two non-wrapping rows share one container');
     assert(getComputedStyle(box).backgroundColor === 'rgb(9, 12, 16)' && getComputedStyle(a).backgroundColor === 'rgba(0, 0, 0, 0)' && getComputedStyle(b).backgroundColor === 'rgba(0, 0, 0, 0)', 'one opaque shared background contains both independently downloaded tracks');
     const ar = a.getBoundingClientRect(), br = b.getBoundingClientRect();
