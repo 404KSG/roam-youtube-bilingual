@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 
-const runtimeFiles = ['src/extension.mjs', 'src/protocol.mjs', 'src/core.mjs', 'src/clock.mjs', 'src/surface.mjs', 'server/index.mjs', 'server/captions.mjs', 'server/video-info.mjs', 'server/caption-reader.mjs', 'server/request-pool.mjs', 'server/caption-cache.mjs', 'start.command'];
+const runtimeFiles = ['src/settings.mjs', 'src/reading.mjs', 'src/preferences.mjs', 'src/alignment.mjs', 'server/caption-selection.mjs', 'src/extension.mjs', 'src/protocol.mjs', 'src/core.mjs', 'src/clock.mjs', 'src/surface.mjs', 'server/index.mjs', 'server/captions.mjs', 'server/video-info.mjs', 'server/caption-reader.mjs', 'server/request-pool.mjs', 'server/caption-cache.mjs', 'start.command'];
 test('all plugin controls, messages, and helper notices use English', async () => {
   for (const path of runtimeFiles) {
     const text = await readFile(new URL(`../${path}`, import.meta.url), 'utf8');

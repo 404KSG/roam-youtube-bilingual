@@ -83,6 +83,16 @@ test('the displayed Chinese paragraph stays fixed while the English segment stay
   for (const time of [.5, 1.5, 3.5]) { video.time = time; video.updatePair(); assert.equal(video.pair.target, '完整的中文段落。'); }
 });
 
+test('a genuinely empty translated segment retains English rather than borrowing a neighboring translation', () => {
+  const { video } = harness();
+  Object.assign(video, { enabled: true, ccState: 'off', ccVerifiedAt: Date.now(), time: 5, info: { sourceLanguage: 'en' } });
+  video.clock.isSynchronized = () => true; video.drawPair = () => {};
+  video.tracks.set('en', [{ start: 0, end: 2, text: 'Earlier.' }, { start: 2, end: 6, text: 'English without a translation.' }]);
+  video.tracks.set('zh-Hans', [{ start: 0, end: 2, text: '上一句。' }]);
+  video.updatePair();
+  assert.equal(video.pair.source, 'English without a translation.'); assert.equal(video.pair.target, '');
+});
+
 test('the last metadata subscriber cancels the underlying request', async () => {
   let resolve, upstream;
   const { video } = harness({ request: (_path, _body, signal) => { upstream = signal; return new Promise(yes => { resolve = yes; }); } });

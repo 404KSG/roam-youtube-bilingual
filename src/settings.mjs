@@ -1,5 +1,14 @@
 import { DEFAULT_CONFIG } from './protocol.mjs';
 
+export function popoverPosition(anchor, size, viewport, video) {
+  const clampX = value => Math.max(12, Math.min(value, viewport.width - size.width - 12));
+  const clampY = value => Math.max(12, Math.min(value, viewport.height - size.height - 12));
+  if (anchor.bottom + 8 + size.height <= viewport.height - 12) return { left: clampX(anchor.right - size.width), top: anchor.bottom + 8 };
+  const right = Math.max(anchor.right, video.right) + 8;
+  if (right + size.width <= viewport.width - 12) return { left: right, top: clampY(anchor.top) };
+  return { left: clampX(anchor.right - size.width), top: clampY(anchor.top - size.height - 8) };
+}
+
 // A non-modal, light-dismiss surface. It never makes the player inert, locks
 // page scrolling, or owns translation/runtime state.
 export function createSettingsPopover(owner, { css, version, save, onClose }) {
@@ -16,17 +25,17 @@ export function createSettingsPopover(owner, { css, version, save, onClose }) {
     if (ref.closed) return;
     const anchor = owner.toolbarButton.getBoundingClientRect(); if (anchor.width) lastAnchor = anchor;
     const width = Math.max(0, Math.min(320, innerWidth - 24)); panel.style.width = `${width}px`; panel.style.maxHeight = `${Math.max(100, innerHeight - 24)}px`;
-    const height = panel.offsetHeight;
-    let top = lastAnchor.bottom + 8;
-    if (top + height > innerHeight - 12) top = lastAnchor.top - height - 8;
-    panel.style.left = `${Math.max(12, Math.min(lastAnchor.right - width, innerWidth - width - 12))}px`;
-    panel.style.top = `${Math.max(12, Math.min(top, innerHeight - height - 12))}px`;
+    const position = popoverPosition(lastAnchor, { width, height: panel.offsetHeight }, { width: innerWidth, height: innerHeight }, owner.iframe.getBoundingClientRect());
+    panel.style.left = `${position.left}px`; panel.style.top = `${position.top}px`;
   };
   ref.close = ({ restoreFocus = false } = {}) => {
     if (ref.closed) return;
     ref.closed = true; abort.abort(); host.remove(); owner.toolbarButton.setAttribute('aria-expanded', 'false');
     onClose(ref);
-    if (restoreFocus && !owner.disposed && owner.toolbarButton.isConnected) owner.toolbarButton.focus({ preventScroll: true });
+    if (restoreFocus && !owner.disposed) {
+      const target = owner.toolbarButton.isConnected && owner.toolbarButton.getBoundingClientRect().width ? owner.toolbarButton : owner.iframe;
+      target.focus({ preventScroll: true });
+    }
   };
   const heading = node('div', 'ryb-heading'); heading.append(node('h2', '', 'Subtitles'), action('×', 'Close subtitle settings', () => ref.close({ restoreFocus: true }), 'ryb-close')); panel.append(heading);
   const toggleRow = node('label', 'ryb-toggle-row'), enabled = node('input', 'ryb-switch'); enabled.type = 'checkbox'; enabled.setAttribute('role', 'switch'); enabled.setAttribute('aria-label', 'Enable bilingual subtitles'); enabled.checked = owner.wantsEnabled;
@@ -47,11 +56,11 @@ export function createSettingsPopover(owner, { css, version, save, onClose }) {
   };
   const presets = [['#ffffff', 'White'], ['#c7cad6', 'Mist'], ['#ffd580', 'Gold'], ['#b7ccff', 'Blue'], ['#b9e6cf', 'Mint'], ['#edbfd5', 'Pink']];
   for (const [prefix, label] of [['source', 'English'], ['target', 'Translation']]) {
-    const sizeKey = prefix + 'FontSize', colorKey = prefix + 'Color';
+    const sizeKey = prefix + 'FontSize', colorKey = prefix + 'Color', sizeLabel = prefix === 'source' ? 'English' : 'translation';
     const section = node('section', 'ryb-appearance'), row = node('div', 'ryb-appearance-heading'); row.append(node('h3', '', label));
     const stepper = node('div', 'ryb-stepper'), size = node('input'); size.type = 'number'; size.name = sizeKey; size.min = '12'; size.max = '36'; size.step = '1'; size.value = String(owner.config[sizeKey]); size.setAttribute('aria-label', label + ' font size'); size.title = '12–36 px'; fields.set(sizeKey, size);
     const changeSize = delta => { const value = Math.min(36, Math.max(12, Number(size.value || owner.config[sizeKey]) + delta)); size.value = String(value); void commit({ [sizeKey]: value }); };
-    stepper.append(action('−', 'Decrease ' + label.toLowerCase() + ' font size', () => changeSize(-1)), size, node('span', 'ryb-unit', 'px'), action('+', 'Increase ' + label.toLowerCase() + ' font size', () => changeSize(1))); row.append(stepper); section.append(row);
+    stepper.append(action('−', 'Decrease ' + sizeLabel + ' font size', () => changeSize(-1)), size, node('span', 'ryb-unit', 'px'), action('+', 'Increase ' + sizeLabel + ' font size', () => changeSize(1))); row.append(stepper); section.append(row);
     size.addEventListener('input', () => { const value = Number(size.value); if (size.value && value >= 12 && value <= 36) void commit({ [sizeKey]: value }); });
     size.addEventListener('change', () => { if (!size.value || Number(size.value) < 12 || Number(size.value) > 36) { size.value = String(owner.config[sizeKey]); status.textContent = 'Font size must be between 12 and 36 px.'; } });
     const colors = node('div', 'ryb-colors'); colors.setAttribute('role', 'group'); colors.setAttribute('aria-label', label + ' text color');

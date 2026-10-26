@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { selectCaptionTracks, captionLanguages } from '../server/caption-selection.mjs';
+import { selectCaptionTracks, captionLanguages, englishCaptionLanguage } from '../server/caption-selection.mjs';
 const track = (params, name = 'English') => [{ ext: 'json3', name, url: 'https://www.youtube.com/api/timedtext?' + params }];
 const metadata = () => ({ id: 'vif8NQcjVf0', title: 'Video', subtitles: { en: track('lang=en') }, automatic_captions: {
   'en-orig': track('lang=en&kind=asr'), 'zh-Hans': track('lang=en&kind=asr&tlang=zh-Hans'),
@@ -20,6 +20,13 @@ test('missing same-source translation fails instead of silently using a differen
   const meta = metadata(); delete meta.automatic_captions['zh-Hans-en'];
   assert.throws(() => selectCaptionTracks(meta, ['zh-Hans'], 'en'), { code: 'SOURCE_TRACK_UNAVAILABLE' });
   assert.equal(captionLanguages(meta, 'en').some(item => item.code === 'zh-Hans'), false);
+});
+test('videos with only automatic English keep both languages on that automatic source', () => {
+  const meta = metadata(); meta.subtitles = {}; delete meta.automatic_captions['zh-Hans-en'];
+  assert.equal(englishCaptionLanguage(meta), 'en-orig');
+  const selected = selectCaptionTracks(meta, ['en-orig', 'zh-Hans'], 'en-orig');
+  assert.equal(new URL(selected['zh-Hans'][0].url).searchParams.get('kind'), 'asr');
+  assert.equal(selected['zh-Hans'][0].downloadLanguage, 'zh-Hans');
 });
 test('uploaded target captions are preferred and subtitle URLs cannot escape YouTube', () => {
   const meta = metadata(); meta.subtitles['zh-Hans'] = track('lang=zh-Hans', 'Uploaded Chinese');
