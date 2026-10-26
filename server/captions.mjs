@@ -5,9 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MAX_SUBTITLE_BYTES, parseSubtitles } from '../src/core.mjs';
 import { englishCaptionLanguage, captionSelection, captionIdentity } from './caption-selection.mjs';
+import { isCaptionTrackKey } from './caption-key.mjs';
 
 const execute = promisify(execFile);
-const LANGUAGE = /^[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})*$/;
 export function captionDownloadError(error) {
   if (/HTTP[^\n]{0,30}429|Too Many Requests/i.test(String(error.stderr || error.message || ''))) {
     return Object.assign(new Error('YouTube returned HTTP 429. The requested captions are unavailable; the bilingual overlay is hidden.'), { status: 429, code: 'YOUTUBE_RATE_LIMITED' });
@@ -33,7 +33,7 @@ export async function fetchCaptionMetadata(videoId, signal, { exec = execute } =
 // No signed-URL files, cookie export, retry fallback or alternate translators.
 export async function fetchCaptionTracks(videoId, languages, signal, { exec = execute, waitSeconds = 0, sourceLanguage, expectedSourceTrack, selections } = {}) {
   if (!/^[\w-]{11}$/.test(videoId || '')) throw new Error('Invalid YouTube video ID.');
-  if (!Array.isArray(languages) || !languages.length || languages.length > 2 || languages.some(language => !LANGUAGE.test(language))) throw new Error('Invalid subtitle language.');
+  if (!Array.isArray(languages) || !languages.length || languages.length > 2 || languages.some(language => !isCaptionTrackKey(language))) throw new Error('Invalid subtitle track identifier.');
   if (!Number.isFinite(waitSeconds) || waitSeconds < 0 || waitSeconds > 60) throw new Error('Invalid caption preparation delay.');
   languages = [...new Set(languages)];
   const folder = await mkdtemp(join(tmpdir(), 'roam-bilingual-'));
@@ -52,7 +52,7 @@ export async function fetchCaptionTracks(videoId, languages, signal, { exec = ex
     }
     for (const language of languages) {
       const entry = plan[language];
-      if (!LANGUAGE.test(entry?.downloadLanguage || '') || !entry.identity || ['lang', 'kind', 'name', 'tlang'].some(key => typeof entry.identity[key] !== 'string')) throw new Error('Invalid subtitle source selection.');
+      if (!isCaptionTrackKey(entry?.downloadLanguage) || !entry.identity || ['lang', 'kind', 'name', 'tlang'].some(key => typeof entry.identity[key] !== 'string')) throw new Error('Invalid subtitle source selection.');
       if (expectedSourceTrack && (language === sourceLanguage || entry.identity.tlang)) {
         if (entry.identity.lang !== expectedSourceTrack.languageCode || entry.identity.kind !== (expectedSourceTrack.kind || '') || entry.identity.name !== (expectedSourceTrack.name || '')) throw Object.assign(new Error('The English subtitle source changed. Reopen this video to refresh it.'), { code: 'SOURCE_TRACK_UNAVAILABLE' });
       }

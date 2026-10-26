@@ -1,4 +1,4 @@
-const LANGUAGE = /^[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})*$/;
+import { isCaptionLanguage, isCaptionTrackKey } from './caption-key.mjs';
 const jsonTrack = tracks => Array.isArray(tracks) ? tracks.find(track => track.ext === 'json3') : undefined;
 const unavailable = () => Object.assign(new Error('YouTube does not provide this language from the selected English captions.'), { code: 'SOURCE_TRACK_UNAVAILABLE' });
 function checkedUrl(track, videoId) {
@@ -7,14 +7,15 @@ function checkedUrl(track, videoId) {
   return url;
 }
 export function englishCaptionLanguage(meta) {
-  const manual = Object.keys(meta.subtitles || {}).filter(key => /^en(?:-|$)/.test(key) && jsonTrack(meta.subtitles[key]));
+  const manual = Object.keys(meta.subtitles || {}).filter(key => isCaptionTrackKey(key) && /^en(?:-|$)/.test(key) && jsonTrack(meta.subtitles[key]));
   manual.sort((a, b) => Number(b === 'en') - Number(a === 'en'));
   if (manual.length) return manual[0];
-  return Object.keys(meta.automatic_captions || {}).filter(key => /^en(?:-|$)/.test(key) && (meta.automatic_captions[key] || []).some(track => {
+  return Object.keys(meta.automatic_captions || {}).filter(key => isCaptionTrackKey(key) && /^en(?:-|$)/.test(key) && (meta.automatic_captions[key] || []).some(track => {
     try { const url = new URL(track.url); return /^en(?:-|$)/.test(url.searchParams.get('lang') || '') && !url.searchParams.has('tlang'); } catch { return false; }
   })).sort((a, b) => Number(b === 'en-orig') - Number(a === 'en-orig'))[0] || null;
 }
 function selectOne(meta, language, sourceLanguage) {
+  if (!isCaptionTrackKey(language) || (sourceLanguage != null && !isCaptionTrackKey(sourceLanguage))) throw new Error('Invalid subtitle track identifier.');
   const uploaded = jsonTrack(meta.subtitles?.[language]);
   let chosen = uploaded, source, downloadLanguage = language;
   if (!chosen) {
@@ -26,6 +27,7 @@ function selectOne(meta, language, sourceLanguage) {
     if (!chosen && language === sourceLanguage) chosen = source;
     if (!chosen) throw unavailable();
   }
+  if (!isCaptionTrackKey(downloadLanguage)) throw new Error('Invalid subtitle track identifier.');
   const url = checkedUrl(chosen, meta.id);
   if (!uploaded) {
     const original = checkedUrl(source, meta.id);
@@ -39,7 +41,7 @@ function selectOne(meta, language, sourceLanguage) {
 export function selectCaptionTracks(meta, languages, sourceLanguage = englishCaptionLanguage(meta)) {
   if (!sourceLanguage) throw unavailable();
   return Object.fromEntries(languages.map(language => {
-    if (!LANGUAGE.test(language)) throw new Error('Invalid subtitle language.');
+    if (!isCaptionTrackKey(language)) throw new Error('Invalid subtitle track identifier.');
     return [language, [selectOne(meta, language, sourceLanguage)]];
   }));
 }
@@ -61,7 +63,7 @@ export function captionLanguages(meta, sourceLanguage) {
   }
   const result = [];
   for (const code of candidates) {
-    if (!LANGUAGE.test(code) || code.endsWith('-orig')) continue;
+    if (!isCaptionLanguage(code) || code.endsWith('-orig')) continue;
     try { const track = selectOne(meta, code, sourceLanguage); result.push({ code, name: track.name, autoTranslated: new URL(track.url).searchParams.has('tlang'), selection: { downloadLanguage: track.downloadLanguage, identity: captionIdentity(track, meta.id) } }); }
     catch { /* Do not advertise a translation from a different source track. */ }
   }

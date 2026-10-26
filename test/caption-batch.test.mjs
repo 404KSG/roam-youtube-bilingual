@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { writeFile, access } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fetchCaptionTracks } from '../server/captions.mjs';
-import { fixtureMetadata, fixtureVideoId as id } from './caption-fixtures.mjs';
+import { fixtureMetadata, fixtureVideoId as id, namedTrackMetadata, namedEnglishKey } from './caption-fixtures.mjs';
 const json3 = text => JSON.stringify({ events: [{ tStartMs: 0, dDurationMs: 2000, segs: [{ utf8: text }] }] });
 function cli(download, metadata = fixtureMetadata()) {
   return async (_file, args, options) => {
@@ -17,6 +17,27 @@ function cli(download, metadata = fixtureMetadata()) {
     catch (error) { error.stdout = JSON.stringify(observed); throw error; }
   };
 }
+test('a named English source can be downloaded through its full opaque track key', async () => {
+  const result = await fetchCaptionTracks(id, [namedEnglishKey], undefined, { sourceLanguage: namedEnglishKey, exec: cli(async ({ folder, selected }) => {
+    assert.ok(selected[namedEnglishKey]);
+    await writeFile(join(folder, `${id}.${namedEnglishKey}.json3`), json3('Named English track'));
+  }, namedTrackMetadata()) });
+  assert.equal(result.tracks[namedEnglishKey][0].text, 'Named English track');
+});
+test('a translated alias carrying the same opaque source ID is accepted without losing its preparation delay', async () => {
+  const alias = 'zh-Hans-' + namedEnglishKey;
+  const result = await fetchCaptionTracks(id, ['zh-Hans'], undefined, { sourceLanguage: namedEnglishKey, waitSeconds: 60, exec: cli(async ({ folder, args, selected }) => {
+    assert.equal(args[args.indexOf('--sleep-subtitles') + 1], '60');
+    assert.ok(selected[alias]);
+    await writeFile(join(folder, `${id}.${alias}.json3`), json3('同源译文'));
+  }, namedTrackMetadata()) });
+  assert.equal(result.tracks['zh-Hans'][0].text, '同源译文');
+});
+test('unsafe download selectors are rejected before executing yt-dlp', async () => {
+  let calls = 0;
+  await assert.rejects(fetchCaptionTracks(id, ['zh-Hans'], undefined, { selections: { 'zh-Hans': { downloadLanguage: 'zh-Hans|en', identity: { lang: 'en', kind: '', name: '', tlang: 'zh-Hans' } } }, exec: async () => { calls++; } }), /Invalid subtitle source selection/);
+  assert.equal(calls, 0);
+});
 test('a native batch downloads English and the manual-source target while preserving both texts', async () => {
   let folder;
   const result = await fetchCaptionTracks(id, ['en', 'ja'], undefined, { exec: cli(async data => {

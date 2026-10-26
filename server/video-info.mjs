@@ -1,6 +1,6 @@
 import { captionDownloadError, fetchCaptionMetadata } from './captions.mjs';
 import { captionLanguages, englishCaptionLanguage, captionSelection } from './caption-selection.mjs';
-const LANGUAGE = /^[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})*$/;
+import { isCaptionLanguage } from './caption-key.mjs';
 
 export function sanitizeVideoInfo(meta, videoId) {
   if (meta?.id !== videoId || typeof meta.title !== 'string' || !meta.title.trim()) throw new Error('YouTube returned incomplete video metadata.');
@@ -13,7 +13,7 @@ export function sanitizeVideoInfo(meta, videoId) {
   try {
     const url = new URL(selected?.url);
     const language = url.searchParams.get('lang');
-    if (LANGUAGE.test(language || '')) playerSourceLanguage = language;
+    if (isCaptionLanguage(language)) playerSourceLanguage = language;
     kind = url.searchParams.get('kind') === 'asr' ? 'asr' : '';
     name = url.searchParams.get('name') || '';
     vssId = url.searchParams.get('vss_id') || undefined;

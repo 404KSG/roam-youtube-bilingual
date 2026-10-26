@@ -17,7 +17,7 @@ test('caption cache survives a helper restart without retaining extra fields', a
 });
 test('named English tracks and translated aliases survive cache round trips and remain bounded', async t => {
   const dir = await directory(t), cache = createCaptionCache(dir, { maxEntries: 2 });
-  for (const key of ['en-ehkg1hFWq8A', 'zh-Hans-en-ehkg1hFWq8A']) {
+  for (const key of ['en-ehkg1hFWq8A', 'zh-Hans-en-a_B-cDefG12']) {
     assert.equal(await cache.put(id, key, cues), true);
     assert.equal((await createCaptionCache(dir).get(id, key))[0].text, 'Caption text');
   }

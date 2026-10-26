@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeServer } from '../server/index.mjs';
+import { createCaptionCache } from '../server/caption-cache.mjs';
+import { sanitizeVideoInfo } from '../server/video-info.mjs';
+import { namedTrackMetadata, namedEnglishKey } from './caption-fixtures.mjs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 const id = 'vif8NQcjVf0';
 const info = { videoId: id, title: 'Test video', sourceLanguage: 'en', playerSourceLanguage: 'en', sourceTrack: { languageCode: 'en', kind: '', name: '' }, languages: [{ code: 'zh-Hans', name: 'Chinese' }, { code: 'ja', name: 'Japanese' }] };
 async function fixture(t, options = {}) {
@@ -29,6 +35,21 @@ test('captions require a video-supported target and cache actual tracks by video
   assert.deepEqual(requested, ['en', 'zh-Hans']);
   assert.equal(infos, 1); assert.equal(captions, 2);
   assert.equal((await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'de' }))).status, 400);
+});
+test('HTTP captions support the reported named source key while rejecting unrelated track IDs', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'ryb-named-api-')); t.after(() => rm(directory, { recursive: true, force: true }));
+  const namedInfo = sanitizeVideoInfo(namedTrackMetadata(), id), calls = [];
+  const base = await fixture(t, { infoFetcher: async () => namedInfo, captionCache: createCaptionCache(directory), captionFetcher: async (_id, key) => {
+    calls.push(key); return [{ start: 0, end: 2, text: key === namedEnglishKey ? 'Named English' : 'Translated Chinese' }];
+  } });
+  const target = await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'zh-Hans' }));
+  assert.equal(target.status, 200); assert.equal((await target.json()).sourceLanguage, namedEnglishKey);
+  const source = await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: namedEnglishKey }));
+  assert.equal(source.status, 200); assert.equal((await source.json()).cues[0].text, 'Named English');
+  const before = calls.length;
+  assert.equal((await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'en-unrelatedTrackID' }))).status, 400);
+  assert.equal((await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'en-../private' }))).status, 400);
+  assert.equal(calls.length, before);
 });
 test('target-first loading batches both tracks and the source request hits cache', async (t) => {
   const batches = [];

@@ -2,12 +2,13 @@ import { mkdir, lstat, readFile, writeFile, rename, readdir, unlink } from 'node
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { MAX_SUBTITLE_BYTES, normalizeCues } from '../src/core.mjs';
+import { isCaptionTrackKey } from './caption-key.mjs';
 
-const VIDEO = /^[\w-]{11}$/, LANGUAGE = /^[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})*$/;
+const VIDEO = /^[\w-]{11}$/;
 // Runtime cache only: normalized captions, never cookies, tokens, or signed URLs.
 export function createCaptionCache(directory, { now = Date.now, maxAgeMs = 86400000, maxEntries = 24 } = {}) {
   const pathFor = (videoId, language) => {
-    if (!VIDEO.test(videoId) || !LANGUAGE.test(language)) throw new Error('Invalid caption cache key.');
+    if (!VIDEO.test(videoId) || !isCaptionTrackKey(language)) throw new Error('Invalid caption cache key.');
     return join(directory, `${videoId}.${language}.json`);
   };
   return {
@@ -35,7 +36,10 @@ export function createCaptionCache(directory, { now = Date.now, maxAgeMs = 86400
         await writeFile(temp, body, { mode: 0o600, signal });
         signal?.throwIfAborted();
         await rename(temp, path);
-        const files = (await readdir(directory)).filter(name => /^[\w-]{11}\.[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})*\.json$/.test(name));
+        const files = (await readdir(directory)).filter(name => {
+          const match = /^([\w-]{11})\.([a-zA-Z0-9_-]+)\.json$/.exec(name);
+          return match && isCaptionTrackKey(match[2]);
+        });
         if (files.length > maxEntries) {
           const entries = await Promise.all(files.map(async name => { const file = join(directory, name); try { return { file, mtime: (await lstat(file)).mtimeMs }; } catch { return null; } }));
           for (const entry of entries.filter(Boolean).sort((a, b) => b.mtime - a.mtime).slice(maxEntries)) await unlink(entry.file).catch(() => {});

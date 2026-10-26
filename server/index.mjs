@@ -8,6 +8,7 @@ import { resolve } from 'node:path';
 import { fetchCaptionTracks } from './captions.mjs';
 import { createRequestPool } from './request-pool.mjs';
 import { createCaptionCache } from './caption-cache.mjs';
+import { isCaptionTrackKey } from './caption-key.mjs';
 import { fetchVideoInfo } from './video-info.mjs';
 import { createCaptionReader, createPeerVerifier, validRect } from './caption-reader.mjs';
 import { VERSION, SERVICE_ID, API_VERSION } from '../src/protocol.mjs';
@@ -109,7 +110,7 @@ export function makeServer({ port = 17321, captionFetcher, captionBatchFetcher =
         const reasons = new Set(['control', 'controls-hidden', 'native-caption-visible', 'player-not-visible', 'unrecognized-control', 'busy', 'window-not-visible']);
         return json(200, { videoId: body.videoId, state, checkedAt: Number.isFinite(result?.checkedAt) ? result.checkedAt : Date.now(), ...(reasons.has(result?.reason) ? { reason: result.reason } : {}) });
       }
-      if (path === '/v1/youtube/captions' && !/^[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})*$/.test(body.target || '')) return json(400, { error: 'Invalid subtitle language.' });
+      if (path === '/v1/youtube/captions' && !isCaptionTrackKey(body.target)) return json(400, { error: 'Invalid subtitle track identifier.' });
       const info = await getInfo(body.videoId, controller.signal);
       if (path === '/v1/youtube/video-info') return json(200, info);
       if (!info.sourceLanguage) return json(422, { error: 'This video has no available English captions.' });
