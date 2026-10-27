@@ -927,11 +927,8 @@ class VideoCaptions {
   }
   notice(message, duration = 6000, kind = 'info') {
     if (this.disposed) return;
-    const pending = this.loadingMessage();
-    if (pending) { message = pending; duration = 0; kind = 'loading'; }
-    else if (this.enabled && this.targetError) { message = 'Translation unavailable. Open settings for details.'; duration = 0; kind = 'error'; }
     if (settings?.owner === this && settings.status) {
-      const status = this.statusMessage() || message;
+      const status = kind === 'info' ? message : this.statusMessage() || message;
       if (settings.status.textContent !== status) settings.status.textContent = status;
     }
     const key = `${this.epoch}:${kind}:${duration}:${message}`;
@@ -939,7 +936,11 @@ class VideoCaptions {
     this.lastNoticeKey = key;
     clearTimeout(this.noticeTimer); this.noticeBox.textContent = message; this.noticeBox.hidden = !message;
     if (this.noticeBox.dataset) this.noticeBox.dataset.kind = kind;
-    if (duration) this.noticeTimer = setTimeout(() => { if (this.lastNoticeKey === key) this.noticeBox.hidden = true; }, duration);
+    if (duration) this.noticeTimer = setTimeout(() => {
+      if (this.lastNoticeKey !== key) return;
+      if (this.loadingMessage() || this.enabled && this.targetError) this.refreshStatusNotice();
+      else this.noticeBox.hidden = true;
+    }, duration);
   }
   cancelInfo() {
     const task = this.infoTask; this.infoTask = null; task?.abort.abort();
@@ -1032,7 +1033,7 @@ class VideoCaptions {
     for (const video of videos.values()) if (video !== this && video.enabled) { video.turnOff(); video.restoreAttempted = false; }
     this.turnOff(); this.enabled = true; this.loading = true; this.loadingPhase = 'cache-reading'; this.targetPhase = ''; this.lastError = ''; this.targetError = ''; this.nativeError = '';
     const target = this.config.target, epoch = this.epoch, abort = this.startRequest = new AbortController();
-    this.updateIcon(); this.notice('Reading saved subtitles…');
+    this.updateIcon(); this.refreshStatusNotice();
     try {
       verifyHealth(await request('/v1/youtube/health', undefined, abort.signal));
       const url = `${SERVICE_URL}/v1/youtube/caption-session?client_version=${encodeURIComponent(VERSION)}`;
@@ -1085,7 +1086,9 @@ class VideoCaptions {
         this.clearPair();
         if (this.ccState === 'on') {
           this.nativeWasOn ??= true; this.nativeChanged = true;
-          this.clock?.unloadCaptions(); this.notice('Native captions are still on. Bilingual subtitles remain hidden.');
+          this.clock?.unloadCaptions();
+          if (this.loading || this.targetError) this.refreshStatusNotice();
+          else this.notice('Native captions are still on. Bilingual subtitles remain hidden.');
         } else if (data.reason === 'controls-hidden') this.clock?.wakeCaptionControls();
         if (settings?.owner === this) settings.refresh?.();
         return;
@@ -1093,7 +1096,7 @@ class VideoCaptions {
       this.nativeWasOn ??= false; this.ccVerifiedAt = data.checkedAt;
       this.nativeError = ''; this.refreshStatusNotice(); this.updatePair();
     } catch (error) {
-      if (error.name !== 'AbortError' && epoch === this.epoch) { this.ccState = 'unknown'; this.clearPair(); this.nativeError = error.message; this.notice(error.message); if (settings?.owner === this) settings.refresh?.(); this.nextCcCheck = Date.now() + 2000; }
+      if (error.name !== 'AbortError' && epoch === this.epoch) { this.ccState = 'unknown'; this.clearPair(); this.nativeError = error.message; if (this.loading || this.targetError) this.refreshStatusNotice(); else this.notice(error.message); if (settings?.owner === this) settings.refresh?.(); this.nextCcCheck = Date.now() + 2000; }
     } finally { if (this.ccRequest === abort) this.ccRequest = null; }
   }
   updatePair() {

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0-beta.17 — Persistent translation status
+
+- Keep a compact loading indicator visible while English is ready and translation is pending. Native-CC confirmations and old toast timers no longer erase it.
+- Remove loading status when the verified target arrives. Target failures show a persistent, distinct error indicator; OFF and video changes clear it. Genuine gaps in an already loaded translation do not show a false loading message.
+- Derive settings status from current loading and native-CC state, removing stale CC-on warnings. Avoid repeated live-region text changes when the status is unchanged.
+- Respect reduced motion and small video bounds without changing caption layout, player geometry, global preferences, downloads, or the API-v8 helper contract.
+- Passed 153 Node tests and 101 isolated UI checks, including waiting beyond the previous timeout, target success/failure, CC polling, and OFF cleanup. Temporary action notices can still appear before returning to pending status. No new full desktop-playback claim is made.
+
 ## 0.5.0-beta.16 — Native browser transport
 
 - Bind caption-session fetch to the browser global receiver. This fixes the native `Illegal invocation` error that Node fetch and mocked UI requests did not expose.

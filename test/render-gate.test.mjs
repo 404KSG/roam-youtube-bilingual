@@ -181,13 +181,25 @@ test('an old transient timer cannot hide loading and OFF clears the persistent i
   delete video.notice;
   video.notice('Earlier transient message'); const oldTimer = [...timers.values()][0];
   installCaptionData(video, [{ start: 0, end: 2, text: 'English' }]);
-  video.enabled = true; video.loading = true;
-  video.notice('Checking that native captions are off…');
+  video.enabled = true; video.loading = true; video.info = { sourceLanguage: 'en' };
+  const session = video.session = { epoch: video.epoch }; video.captionData.owner = session; video.checkNativeCc = async () => {};
+  video.handleSessionEvent({ type: 'source-ready', language: 'en', sourceFingerprint: 'a'.repeat(64), cues: [{ start: 0, end: 2, text: 'English' }] }, session);
   assert.equal(timers.size, 0, 'pending translation must not have an auto-hide timer');
   oldTimer();
   assert.equal(video.noticeBox.hidden, false);
   assert.equal(video.noticeBox.textContent, 'Loading translation…');
   video.turnOff(); assert.equal(video.noticeBox.hidden, true);
+});
+test('a temporary action notice can be shown without losing pending translation status afterward', () => {
+  const timers = new Map(); let next = 0;
+  const { video } = harness({ setTimer: fn => { timers.set(++next, fn); return next; }, clearTimer: id => timers.delete(id) });
+  installCaptionData(video, [{ start: 0, end: 2, text: 'English' }]); video.enabled = true; video.loading = true; delete video.notice;
+  video.refreshStatusNotice();
+  video.notice('Fullscreen is unavailable.');
+  assert.equal(video.noticeBox.textContent, 'Fullscreen is unavailable.');
+  [...timers.values()][0]();
+  assert.equal(video.noticeBox.hidden, false); assert.equal(video.noticeBox.textContent, 'Loading translation…');
+  assert.equal(video.noticeBox.dataset.kind, 'loading'); assert.equal(timers.size, 0);
 });
 test('translation failure replaces loading and survives subsequent CC checks', async () => {
   const { video } = harness({ request: async () => ({ videoId: 'vif8NQcjVf0', state: 'off', reason: 'control', checkedAt: Date.now() }) });
