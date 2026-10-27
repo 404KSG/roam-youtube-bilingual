@@ -1,90 +1,44 @@
-# Roam 双语字幕
+# YouTube Bilingual Subtitles for Roam Research
 
-> **0.5.0-beta.17 — Draft 预览版，服务 API v8。** 英文已显示、译文仍在准备时，视频内会持续显示紧凑的加载标记；译文到达后自动消失，失败则显示错误。设置面板同步真实状态，不保留已过时的原生 CC 警告。兼容现有 API v8 helper。
+English and translated YouTube captions in one synchronized overlay, with global styling and local caching. No external AI translation service or API key.
 
-## 观看与设置
+**Current build:** `0.5.0-beta.17` · **Helper API:** `8` · **Platform:** macOS Roam Desktop
 
-- 只保留一个原生 Blueprint `translate` 图标。预览时加入右侧原生按钮组，悬停或键盘聚焦时显示；剧场模式沿用底部工具栏。
-- 设置是紧凑的非模态菜单：开关并入标题行，English 与 Translation 各占一行；点击色块才在原位展开对应调色区，一次只展开一组。
-- 卡片优先放在视频与工具栏下方；放不下时向上展开，并保持在可视区和视频列附近，不进入单独的右侧栏。只有整个视口都比卡片矮时才使用内部滚动。
-- 不插入空白占位、不强制滚动页面、不调整视频尺寸。窗口缩放、侧栏开合、页面滚动、颜色展开及提示内容变化时都会重新定位，全屏也使用同一套可视区约束。
-- 点击外部、点击视频或按 Esc 关闭，没有 Done 按钮或整页遮罩。English 与 Translation 仍分别支持字号步进、预设色、自定义六位十六进制色及 Reset style。
-- 两种语言共用一个背景，各自最多两行。不截断文字；极长字幕或很小的视频仍可能独立缩小字号以适配。
-- 同源短段按标点、时间间隔和有界时长组织显示；合并段放不下时使用原有小段，不把整段挤成极小字。仅跨越很短的字幕制作空档，不跨真实停顿借用文字。
-- 未设置时默认英文 20 px、译文 18 px，文字均为白色；Reset style 将全局样式恢复为这一组合，不改语言和开关。
-- 字号与颜色即时预览，调节时不关闭字幕。设置、提示、语言名称、命令和错误均为英文。
-- 等待译文时持续显示小型 `Loading translation…` 标记，不在 6 秒后自动隐藏，也不会被原生 CC-off 检查清掉。成功后消失，失败改为 `Translation unavailable. Open settings for details.`；关闭字幕或换片会清理旧状态。提示不拦截播放器操作，遵守减少动态效果设置，不伪造倒计时或翻译进度。
-- 所有选择保存在当前客户端的一份全局配置中。换视频、在同一播放器内换片或重载扩展，都会沿用最后保存的开关、语言、字号和颜色；已打开的播放器与同一本地存储环境中的其他窗口也会同步。
-- 旧配置只用于首次迁移：优先继承当前已开启或唯一已开启的旧视频配置，不破坏原记录；多个开启配置的样式冲突时提示检查一次。之后不再用旧的逐视频配置覆盖全局选择。
-- 全局开启不等于自动播放，也不会同时为所有视频批量下载；仍只准备当前可见/被激活的播放器。单个视频无字幕、语言不支持或下载失败，不会清除全局开启选择。
+<img src="https://raw.githubusercontent.com/404KSG/roam-youtube-bilingual/3c75575b29d9388cdc86b06222943be39047d044/assets/roam-bilingual-subtitles.png" width="900" alt="English and Chinese captions in Roam, with independent font sizes, colors, and global subtitle settings">
 
-## 译文为什么改了
+*User-provided example with custom styles. Personal sidebar and image metadata removed. [Source video](https://www.youtube.com/watch?v=4AWLcxTGZPA).*
 
-旧版可能把人工英文字幕与另一条自动识别英文的机翻中文放在一起。按时间拼接能减少跳动，却不能修复两条源字幕的差异或识别错词。
+## Features
 
-本版优先使用视频提供的人工目标字幕；需要 YouTube 自动翻译时，选择与英文相同的源轨道。使用 yt-dlp 原生的人工源语言别名，在**同一进程内完成提取、准备等待和下载**，并核对实际下载轨道的身份，不静默退回另一条 ASR 译文。
+- One overlay, up to two lines per language, with independent font sizes and colors.
+- Settings persist across videos and reloads on the same device.
+- English can appear first while a compact indicator shows translation loading.
+- Verified local caption bundles avoid unnecessary downloads. Uploaded target captions are preferred; automatic translations use the selected English source.
 
-- 原始/人工字幕保持快速路径。自动译文在提取后等待约 60 秒，再下载；这是 [yt-dlp 维护者说明的准备等待](https://github.com/yt-dlp/yt-dlp/issues/13831#issuecomment-3712613129)，不是失败后反复重试。
-- 此前的同源实现已对真实视频 `vif8NQcjVf0` 取得 2,108 段英文和 2,098 段同源中文；旧的 ASR 中文为 3,700 段。样例中的 NVLink、网卡、光模块已能与人工英文对应。
-- 同一视频仍有 12 个英文段对应的 YouTube 原始译文响应为空。此时保留英文，不用邻句、旧译文或自行生成的内容补空。
-- 这里只改善字幕来源、分段和呈现，不保证 YouTube 机翻本身处处流畅，也不引入额外 AI 翻译、API 密钥或新的语音识别服务。
+## Setup
 
-## 单一渲染与原生 CC
+Requires Node.js 22.10+, yt-dlp, and CuaDriver with existing Accessibility access. Nothing is installed or authorized automatically.
 
-插件显示前会请求关闭 YouTube 原生 CC，并通过限定范围的本机只读桥确认该播放器的关闭状态。确认前不显示自有字幕。控件隐藏只能维持同一可见播放器已有的关闭确认；原生字幕节点重新出现、播放器消失、状态无法识别或读取失败，都关闭显示门禁。
+1. Clone this repository and run `./start.command` to start the local helper.
+2. Until catalog approval, add this shorthand in Roam Depot's developer mode:
 
-原生字幕存在性判断只用角色、归属和位置，不提取字幕文本，不用遮罩覆盖原生字幕。英文原文验证前不操作原生 CC；仅译文失败时可保留已验证英文。停用或字幕流异常时先隐藏自有层、取消迟到结果，再恢复本实例曾确认开启并主动关闭的原生 CC。
+   ```text
+   404KSG+roam-youtube-bilingual+1509
+   ```
 
-## 安装与升级
+3. Reload the extension, open a YouTube embed, and enable subtitles using the translate icon.
 
-1. 本版仍针对 **macOS Roam Research 桌面版**。需要已有 Node.js 22.10+、yt-dlp、CuaDriver 及其既有辅助功能权限；插件不会自行安装、升级、授权或启动录制。
-2. 使用最新源码重新启动 `start.command`。**本版 helper 为 API v8，不能继续使用 API v7。** 不需要配置 AI 服务。
-3. **从 API v7 升级时，helper 和扩展必须一起更新并激活。** 随后重载原有 Draft 扩展，确认显示 `Version 0.5.0-beta.17`；全局设置保持不变。已有 API v8 helper 无需为本次提示修复重启。
-4. 全局开启后，后续视频自动沿用。新视频首次同源译文准备约需一分钟，之后优先复用缓存；等待或失败不会把全局开关和样式重置。
+The extension requires an API-v8 helper. Use **YouTube subtitles: Fullscreen** to retain the overlay; YouTube's own iframe fullscreen/PiP excludes it.
 
-原 shorthand 不变：
+## Important notes
 
-```text
-404KSG+roam-youtube-bilingual+1509
-```
+- An English caption track is required. A new automatic translation may take about a minute; cached tracks load faster.
+- Native CC must be confirmed off before the custom captions appear. Unknown state keeps the overlay hidden.
+- The helper listens on `127.0.0.1:17321`. Captions and preferences are stored locally; no graph edits, cookie export, or recording.
+- Caption cache: 24-hour validation freshness, 90-day retention, 256 MB limit.
 
-PR #1509 保持 **OPEN / Draft**，不合并、不正式上架、不创建 Release。需要保留双语层的全屏，请使用命令面板 **YouTube subtitles: Fullscreen**；YouTube 自带 iframe 全屏/PiP 不包含插件层。
+## Review status
 
-## 缓存、失败与隐私
+[Submitted to Roam Depot for review](https://github.com/Roam-Research/roam-depot/pull/1509); not yet merged into the catalog.
 
-- 本机服务默认 `http://127.0.0.1:17321`；没有开机启动或定时任务。`.env` 仅读取 `PORT`、`YT_DLP_PATH`、`CUA_DRIVER_PATH`。
-- 已验证的英文/目标配对保存在 `.cache/captions-v3/`：24 小时验证新鲜度、90 天保留期、256 MB/512 文件的按访问 LRU；每条轨道最多 5 MB/20,000 cues。配对绑定英文轨道身份和内容指纹、目标类型/身份/内容、策略和 schema，不存签名 URL、cookies、令牌或原始元数据。旧 `.cache/captions-v2/` 只读并可按需安全导入。
-- 偏好写入独立的本地全局记录，旧版逐视频 v1/v2 记录保留但不再作为持续覆盖项。不向图谱写配置，不保证跨设备或不同浏览器配置之间同步。存储失败会明确提示。
-- 标准语言码与字幕轨道标识分开校验。缓存和下载支持带命名编号的轨道，但仍限制长度及字符集合，拒绝路径、转义和正则注入；HTTP 请求还须匹配当前视频实际提供的源轨道或目标语言。
-- 同键只合并尚未完成的请求，不把进程内旧结果当成当前字幕校验证据。快速任务与自动译文任务各限一路，共用限流保护；新鲜字幕包读取不受长任务排队影响。真实 429 触发 60 秒保护性冷却，不自动重试；本地队列满是独立的 503。
-- 设置与原生 CC 查询可复用独立、有界的显示元数据，避免频繁轮询反复访问 YouTube；这份显示缓存不能用来验证或写入新的字幕配对。
-- 关闭设置只取消其不再需要的订阅；失败、临时让位和播放器销毁不把全局开启选项改为关闭。主动关闭则对所有视频生效；自动恢复不反复重试失败下载。
-- 原生状态读取只接受同一 OS 用户的 Roam 桌面进程连接，并校验 Host、Origin、标题和视频范围；调用方不能指定任意 PID、窗口或工具动作。
-- 只读桥不返回无障碍树、笔记、窗口标题或截图；不截图、不录制、不改图谱或 `roam/css`。录制开启、权限缺失、锁屏或目标播放器不可见时停止显示。
-
-## 参考与边界
-
-参考了[沉浸式翻译的字幕功能与智能分句记录](https://immersivetranslate.com/zh-Hans/docs/CHANGELOG/)、[其 YouTube 机翻问题说明](https://immersivetranslate.com/zh-Hans/docs/faq/)、[Language Reactor 的字幕重建说明](https://www.languagereactor.com/help/whats-new)、[Trancy 的独立字幕样式](https://www.trancy.org/changelog?page=3)，以及 [Linear 的界面层级原则](https://linear.app/changelog/2026-03-12-ui-refresh)。独立实现当前范围内的功能，不声称复制其 AI 分句或上下文翻译能力。
-
-此前对 [FluentRead](https://read.thinkstu.com/guide/video-subtitles) 的借鉴仅限 YouTube 请求、缓存与失败隔离机制，没有复制 GPL 源码或移植浏览器 MAIN-world 权限。网页、PDF、会议、词典、学习模式和新增 ASR 功能仍不在范围内。
-
-## 开发与验证
-
-```bash
-./build.sh
-```
-
-- `src/settings.mjs`：轻量浮层、外点关闭、独立字号和颜色。
-- `src/preferences.mjs`：本机全局记忆、旧记录迁移与跨窗口读取。
-- `src/alignment.mjs`、`src/reading.mjs`：时间对齐与有界阅读段。
-- `src/extension.mjs`：双语显示、独立适配、播放器生命周期与 CC 门禁。
-- `server/caption-selection.mjs`：同源轨道选择和实际下载身份校验。
-- `server/caption-bundle-cache.mjs`、`server/caption-session.mjs`：验证配对持久缓存、NDJSON session、重校验和渐进事件。
-- `server/captions.mjs`：yt-dlp 原生下载、准备等待和错误分类。
-- `test/*-browser.mjs`：仅用于明确标记的本地模拟页面，不是真实视频播放证据。
-
-beta.17 的持续提示修复已通过 153 项 Node 测试、101 项隔离界面检查，以及小视口和减少动态效果检查。这次没有改动下载、缓存或原生字幕安全门禁。
-
-此前 beta.16 已通过 147 项 Node 测试、95 项隔离界面检查，以及 5 项不替换原生 `fetch` 的真实浏览器 HTTP/流式响应检查；后一组仍使用固定字幕测试数据。真实命名轨道视频 `4AWLcxTGZPA` 的英文约 3.97 秒、中文约 65.21 秒到达；隔离 helper 进程重启并禁止所有上游请求后，配对字幕约 33 毫秒返回。旧 v2 缓存迁移只查询一次元数据，没有重新下载字幕。这些是接口与客户端解析耗时，不是 Roam 画面显示耗时，也不是所有新视频的速度保证。
-
-真实字幕获取、模拟界面检查与真实 Roam 桌面播放必须分别记录。测试截图、请求诊断和验收记录只放在 Git 排除的 `artifacts/` 中；有限采样不等于所有视频、所有帧的可用性保证。
+`./build.sh` builds and runs the tests. The current runtime passed **153 Node tests** and **101 isolated UI checks**. Full desktop acceptance for sustained playback, seeking, and live language switching remains incomplete.
