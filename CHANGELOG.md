@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0-beta.16 — Native browser transport
+
+- Bind caption-session fetch to the browser global receiver. This fixes the native `Illegal invocation` error that Node fetch and mocked UI requests did not expose.
+- Add a browser fixture that uses unmodified native fetch and a real local HTTP/NDJSON response, plus a receiver-sensitive regression test.
+- Passed 147 Node tests, 95 isolated UI checks, and 5 native browser transport checks. Fixture captions remain distinct from real YouTube and Roam playback evidence.
+- API v8 and the beta.15 cache/session architecture remain unchanged. Existing API-v8 helpers are compatible; API-v7 helpers still require updating.
+
 ## 0.5.0-beta.15 — Verified bundle sessions
 
 - Upgrade the helper/client contract to API v8. The beta.15 extension and API-v8 helper must be activated together; API-v7 compatibility is intentionally rejected by health checks.

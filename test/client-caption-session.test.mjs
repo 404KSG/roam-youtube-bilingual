@@ -10,6 +10,15 @@ const events = targetLanguage => [{ ...base, sequence: 1, type: 'info', cacheDis
 const response = (list, onCancel) => new Response(new ReadableStream({ start(controller) { for (const event of list) controller.enqueue(new TextEncoder().encode(JSON.stringify(event) + '\n')); controller.close(); }, cancel: onCancel }), { headers: { 'Content-Type': 'application/x-ndjson; charset=utf-8' } });
 const session = fetchImpl => new CaptionSession({ videoId, target, epoch: 1, signal: new AbortController().signal, url: 'http://fixture/session', fetchImpl, onEvent() {} });
 
+test('client session preserves the browser global receiver required by native fetch', async () => {
+  let invoked = false;
+  const browserFetch = function () {
+    if (this !== globalThis) throw new TypeError('Illegal invocation');
+    invoked = true; return Promise.resolve(response(events(target)));
+  };
+  await session(browserFetch).start();
+  assert.equal(invoked, true);
+});
 test('client session accepts a coherent bilingual stream', async () => {
   await session(async () => response(events(target))).start();
 });

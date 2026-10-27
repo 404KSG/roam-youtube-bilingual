@@ -12,7 +12,7 @@ const boundedCues = cues => {
 };
 export class CaptionSession {
   constructor({ videoId, target, epoch, signal, fetchImpl = fetch, url, onEvent }) {
-    this.videoId = videoId; this.target = target; this.epoch = epoch; this.signal = signal; this.fetchImpl = fetchImpl; this.url = url; this.onEvent = onEvent;
+    this.videoId = videoId; this.target = target; this.epoch = epoch; this.signal = signal; this.fetchImpl = fetchImpl.bind(globalThis); this.url = url; this.onEvent = onEvent;
     this.sequence = 0; this.sourceFingerprint = null; this.info = null; this.sourceReady = false; this.targetReady = false; this.targetFailed = false; this.terminal = false;
   }
   accept(event) {
