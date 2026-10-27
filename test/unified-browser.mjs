@@ -21,7 +21,7 @@ export async function runUnifiedAcceptance(options = {}) {
   preferenceKeys.forEach(key => localStorage.removeItem(key));
   const before = frame.getBoundingClientRect().toJSON();
   const originalFetch = window.fetch;
-  const source = 'This English sentence\nwas previously wrapped onto two lines.';
+  let source = 'This English sentence\nwas previously wrapped onto two lines.', sourceVersion = 0;
   const targets = { 'zh-Hans': ['第一行中文', '第二行中文'], ja: ['日本語の字幕を', '一行にまとめます。'], fr: ['Une ligne française', 'sans retour à la ligne.'] };
   let ccState = 'off', ccReason = 'control', releaseLate, hold = false, releaseTarget, holdTarget = true, targetFailure = false;
   sessionStorage.setItem('roam-youtube-bilingual/session/v1', JSON.stringify({ target: 'zh-Hans', fontSize: 20 }));
@@ -32,7 +32,7 @@ export async function runUnifiedAcceptance(options = {}) {
     if (path.endsWith('/health')) data = { ok: true, service: 'roam-youtube-bilingual', apiVersion: 8, provider: 'youtube-unified' };
     else if (path.endsWith('/video-info')) data = { videoId: body.videoId, title: 'Fixture video', sourceLanguage: 'en', languages: [{ code: 'en', name: 'English' }, { code: 'zh-Hans', name: 'Chinese' }, { code: 'ja', name: 'Japanese' }, { code: 'fr', name: 'French' }] };
     else if (path.endsWith('/caption-session')) {
-      const parts = targets[body.target] || targets['zh-Hans'], sourceFingerprint = 'a'.repeat(64), pairId = 'b'.repeat(64), base = { videoId: body.videoId, target: body.target, captionPolicy: 'same-source-v1' };
+      const parts = targets[body.target] || targets['zh-Hans'], sourceFingerprint = String.fromCharCode(97 + sourceVersion).repeat(64), pairId = 'b'.repeat(64), base = { videoId: body.videoId, target: body.target, captionPolicy: 'same-source-v1' };
       const events = [{ ...base, sequence: 1, type: 'phase', phase: 'cache-reading' }, { ...base, sequence: 2, type: 'info', cacheDisposition: 'miss', info: { videoId: body.videoId, title: 'Fixture video', sourceLanguage: 'en', languages: [{ code: 'en', name: 'English' }, { code: 'zh-Hans', name: 'Chinese' }, { code: 'ja', name: 'Japanese' }, { code: 'fr', name: 'French' }] } }, { ...base, sequence: 3, type: 'source-ready', language: 'en', sourceFingerprint, cues: [{ start: 0, end: 4, text: source }, { start: 4, end: 8, text: 'Next English segment.' }] }];
       const targetEvents = targetFailure ? [{ ...base, sequence: 4, type: 'target-error', code: 'YOUTUBE_RATE_LIMITED', message: 'Translated captions are unavailable; English remains available.' }, { ...base, sequence: 5, type: 'complete', outcome: 'source-only' }] : [{ ...base, sequence: 4, type: 'target-ready', language: body.target, targetType: 'auto-translated', sourceFingerprint, pairId, cues: [{ start: 0, end: 2, text: parts[0] }, { start: 2, end: 4, text: parts[1] }, { start: 4, end: 8, text: '下一段译文。' }] }, { ...base, sequence: 5, type: 'complete', outcome: 'bilingual' }];
       return new Response(new ReadableStream({ start(controller) { const send = event => controller.enqueue(new TextEncoder().encode(JSON.stringify(event) + '\n')); events.forEach(send); const finish = () => { targetEvents.forEach(send); controller.close(); }; if (holdTarget) releaseTarget = finish; else finish(); } }), { headers: { 'Content-Type': 'application/x-ndjson; charset=utf-8' } });
@@ -104,6 +104,26 @@ export async function runUnifiedAcceptance(options = {}) {
     assert(Number(a.dataset.fontSize) <= 14 && Number(a.dataset.fontSize) > 0 && Number(b.dataset.fontSize) <= 18 && Number(b.dataset.fontSize) > Number(a.dataset.fontSize), 'English and translation sizes apply independently');
     assert(calls.filter((call) => call.path.endsWith('/caption-session')).length === 2, 'target changes start one cancellable caption session per target');
     assert(calls.filter((call) => call.path.endsWith('/caption-session')).some((call) => call.body.target === 'ja'), 'Japanese selection requests the actual target session');
+    source = 'Returned English source is current.'; sourceVersion = 1; holdTarget = true; targetFailure = true;
+    icon.click(); await wait(() => setting()?.querySelector('select').disabled === false);
+    setting().querySelector('[name=target]').value = 'zh-Hans'; setting().querySelector('[name=target]').dispatchEvent(new Event('change')); done(); clock(1);
+    await wait(() => a.textContent === source && b.hidden && !box.hidden);
+    assert(b.hidden, 'returning to a previously loaded target never renders its old target before current target-ready');
+    releaseTarget(); await wait(() => icon.dataset.loading === 'false');
+    const afterReturnedFailure = calls.filter(call => call.path.endsWith('native-cc-state')).length;
+    await wait(() => calls.filter(call => call.path.endsWith('native-cc-state')).length >= afterReturnedFailure + 2);
+    assert(!box.hidden && a.textContent === source && b.hidden, 'a failed returned target cannot resurrect the previously cached translation after later CC checks');
+    icon.click(); await wait(() => setting()?.querySelector('input[type=checkbox]'));
+    setting().querySelector('input[type=checkbox]').checked = false; setting().querySelector('input[type=checkbox]').dispatchEvent(new Event('change'));
+    assert(box.hidden && icon.dataset.active === 'false', 'OFF discards the returned session before same-target re-enable');
+    source = 'Re-enabled English belongs to a new source.'; sourceVersion = 2; targetFailure = false;
+    targets['zh-Hans'] = ['新的中文', '来自当前英文'];
+    setting().querySelector('input[type=checkbox]').checked = true; setting().querySelector('input[type=checkbox]').dispatchEvent(new Event('change')); done(); clock(1);
+    await wait(() => !box.hidden && a.textContent === source && b.hidden);
+    assert(b.hidden, 'same-target OFF then ON shows only the new source while its matching target is held');
+    releaseTarget(); holdTarget = false;
+    await wait(() => !b.hidden && b.textContent === '新的中文来自当前英文');
+    assert(a.textContent === source && document.querySelectorAll('.ryb-surface-host').length === 1, 'only the new matching target becomes visible without replacing the renderer');
     ccState = 'unknown'; ccReason = 'controls-hidden';
     const checksBeforeHide = calls.filter(call => call.path.endsWith('native-cc-state')).length;
     await wait(() => calls.filter(call => call.path.endsWith('native-cc-state')).length >= checksBeforeHide + 3);

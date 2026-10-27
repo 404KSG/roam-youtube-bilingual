@@ -867,7 +867,7 @@ class VideoCaptions {
     this.iframe = iframe; this.videoId = videoIdFromUrl(iframe.src); this.embedId = this.videoId;
     const saved = preferences.get(this.videoId); this.config = validateConfig(saved); this.wantsEnabled = saved.enabled; this.restoreAttempted = false;
     this.preferenceError = preferences.saveWarning; this.preferenceNotice = preferences.notice;
-    this.tracks = new Map(); this.time = 0; this.epoch = 0; this.enabled = false; this.loading = false; this.ccState = 'unknown'; this.ccVerifiedAt = 0; this.nativeWasOn = null; this.nativeChanged = false;
+    this.captionData = null; this.time = 0; this.epoch = 0; this.enabled = false; this.loading = false; this.ccState = 'unknown'; this.ccVerifiedAt = 0; this.nativeWasOn = null; this.nativeChanged = false;
     this.surface = new VideoSurface(iframe, STYLE); this.surface.host.dataset.version = VERSION;
     this.box = el('div', 'ryb-caption-box'); this.box.hidden = true; this.box.setAttribute('aria-label', 'Bilingual subtitles');
     this.source = el('div', 'ryb-line ryb-source'); this.source.dir = 'ltr';
@@ -964,7 +964,7 @@ class VideoCaptions {
     }, (id) => this.videoChanged(id), { onApiChange: () => this.closeNativeGate(), onIframeLoad: () => this.closeNativeGate() });
   }
   videoChanged(id) {
-    this.cancelInfo(); this.closeNativeGate(); this.turnOff(); this.videoId = id; this.info = null; this.tracks.clear(); this.alignment = null;
+    this.cancelInfo(); this.closeNativeGate(); this.turnOff(); this.videoId = id; this.info = null; this.captionData = null; this.alignment = null;
     const saved = preferences.get(id); this.config = validateConfig(saved); this.wantsEnabled = saved.enabled;
     this.preferenceError = preferences.saveWarning; this.preferenceNotice = preferences.notice;
     this.restoreAttempted = false; this.lastPlayerState = -1; this.lastError = ''; this.targetError = ''; this.nativeError = ''; this.updateIcon();
@@ -977,17 +977,18 @@ class VideoCaptions {
   handleSessionEvent(event, session) {
     if (this.disposed || this.session !== session || session.epoch !== this.epoch) return;
     if (event.type === 'phase') { const message = phaseMessage(event.phase); if (message) this.notice(message); return; }
-    if (event.type === 'info') { this.info = event.info; session.info = event.info; settings?.refresh?.(); return; }
+    const data = this.captionData;
+    if (event.type === 'info') { this.info = event.info; session.info = event.info; if (data?.owner === session) data.info = event.info; settings?.refresh?.(); return; }
     if (event.type === 'source-ready') {
-      if (!this.info || event.language !== this.info.sourceLanguage) throw new Error('The English captions do not match the active video.');
-      this.tracks.set(event.language, event.cues); session.sourceFingerprint = event.sourceFingerprint;
+      if (!data || data.owner !== session || data.epoch !== this.epoch || data.videoId !== this.videoId || !this.info || event.language !== this.info.sourceLanguage) throw new Error('The English captions do not match the active video.');
+      data.source = { language: event.language, fingerprint: event.sourceFingerprint, cues: event.cues }; data.target = null; this.alignment = null; session.sourceFingerprint = event.sourceFingerprint;
       this.connect(); this.closeNativeGate(); this.notice('Checking that native captions are off…'); void this.checkNativeCc(); return;
     }
     if (event.type === 'target-ready') {
-      if (event.sourceFingerprint !== session.sourceFingerprint) throw new Error('The translated captions do not match the active English source.');
-      this.targetError = ''; this.tracks.set(this.config.target, event.cues); this.alignment = null; this.loading = false; this.updateIcon(); this.updatePair(); this.notice('Subtitles ready.'); return;
+      if (!data || data.owner !== session || data.epoch !== this.epoch || data.videoId !== this.videoId || event.language !== data.targetLanguage || event.sourceFingerprint !== data.source?.fingerprint) throw new Error('The translated captions do not match the active English source.');
+      this.targetError = ''; data.target = { language: event.language, sourceFingerprint: event.sourceFingerprint, pairId: event.pairId, cues: event.cues }; this.alignment = null; this.loading = false; this.updateIcon(); this.updatePair(); this.notice('Subtitles ready.'); return;
     }
-    if (event.type === 'target-error') { this.loading = false; this.targetError = event.message; this.updateIcon(); this.notice(event.message); settings?.refresh?.(); return; }
+    if (event.type === 'target-error') { if (data?.owner === session) { data.target = null; this.alignment = null; } this.loading = false; this.targetError = event.message; this.updateIcon(); this.updatePair(); this.notice(event.message); settings?.refresh?.(); return; }
     if (event.type === 'fatal-error') throw Object.assign(new Error(event.message), { code: event.code });
     if (event.type === 'complete') { this.loading = false; this.updateIcon(); if (event.outcome === 'bilingual') { this.lastError = ''; this.notice('Subtitles ready.'); } }
   }
@@ -1002,10 +1003,11 @@ class VideoCaptions {
       verifyHealth(await request('/v1/youtube/health', undefined, abort.signal));
       const url = `${SERVICE_URL}/v1/youtube/caption-session?client_version=${encodeURIComponent(VERSION)}`;
       const session = this.session = new CaptionSession({ videoId: this.videoId, target, epoch, signal: abort.signal, url, onEvent: (event, ref) => this.handleSessionEvent(event, ref) });
+      this.captionData = { owner: session, epoch, videoId: this.videoId, targetLanguage: target, info: null, source: null, target: null };
       await session.start();
       if (this.session === session) this.session = null;
     } catch (error) {
-      if (error.name !== 'AbortError' && epoch === this.epoch) { this.clearPair(); this.enabled = false; this.loading = false; this.lastError = error.message; this.notice(error.message); this.updateIcon(); }
+      if (error.name !== 'AbortError' && epoch === this.epoch) { this.turnOff(); this.lastError = error.message; this.notice(error.message); this.updateIcon(); }
     } finally { if (this.startRequest === abort) { this.startRequest = null; this.loading = false; this.updateIcon(); } }
   }
   clearPair() { this.pair = null; this.renderCache = null; this.box.hidden = true; this.source.textContent = ''; this.target.textContent = ''; }
@@ -1015,7 +1017,7 @@ class VideoCaptions {
   }
   turnOff() {
     this.epoch++; this.enabled = false; this.loading = false;
-    this.startRequest?.abort(); this.startRequest = null; this.session = null; this.ccRequest?.abort(); this.ccRequest = null;
+    this.startRequest?.abort(); this.startRequest = null; this.session = null; this.captionData = null; this.alignment = null; this.ccRequest?.abort(); this.ccRequest = null;
     this.ccState = 'unknown'; this.ccVerifiedAt = 0; this.clearPair();
     // Never switch native CC merely because a download failed or a dialog closed.
     // Restore only a state this instance positively observed and then changed.
@@ -1034,7 +1036,7 @@ class VideoCaptions {
     return { x: screenX + rect.x * scale, y: screenY + outerHeight - innerHeight * scale + rect.y * scale, width: rect.width * scale, height: rect.height * scale };
   }
   async checkNativeCc() {
-    if (!this.enabled || !this.tracks.has(this.info?.sourceLanguage) || this.disposed || this.ccRequest || document.hidden || this.surface.host.style.display === 'none' || Date.now() < (this.nextCcCheck || 0)) return;
+    if (!this.enabled || !this.captionData?.source || this.captionData.videoId !== this.videoId || this.disposed || this.ccRequest || document.hidden || this.surface.host.style.display === 'none' || Date.now() < (this.nextCcCheck || 0)) return;
     const epoch = this.epoch, videoId = this.videoId, abort = this.ccRequest = new AbortController();
     const before = Date.now(), frame = this.screenFrame();
     try {
@@ -1061,16 +1063,17 @@ class VideoCaptions {
   }
   updatePair() {
     if (!this.enabled || this.ccState !== 'off' || Date.now() - this.ccVerifiedAt > 1500 || this.disposed || !this.clock?.isSynchronized()) { this.clearPair(); return; }
-    const sourceCues = this.tracks.get(this.info?.sourceLanguage), targetCues = this.tracks.get(this.config.target);
-    if (!sourceCues) { this.clearPair(); return; }
+    const data = this.captionData;
+    if (!data?.source || data.epoch !== this.epoch || data.videoId !== this.videoId || data.targetLanguage !== this.config.target) { this.clearPair(); return; }
+    const sourceCues = data.source.cues, targetCues = data.target?.sourceFingerprint === data.source.fingerprint && data.target.language === data.targetLanguage ? data.target.cues : null;
     if (!targetCues) {
       const index = activeCueIndex(sourceCues, this.time); const source = index >= 0 ? sourceCues[index].text : '';
       if (!source) { this.clearPair(); return; }
       this.pair = { source, target: '' }; this.drawPair(); return;
     }
-    if (this.alignment?.sourceCues !== sourceCues || this.alignment?.targetCues !== targetCues || this.alignment?.language !== this.config.target) {
-      const pairs = alignCaptionTracks(sourceCues, targetCues, this.config.target);
-      this.alignment = { sourceCues, targetCues, language: this.config.target, pairs, segments: readingSegments(pairs, this.config.target) };
+    if (this.alignment?.sourceCues !== sourceCues || this.alignment?.targetCues !== targetCues || this.alignment?.language !== data.targetLanguage) {
+      const pairs = alignCaptionTracks(sourceCues, targetCues, data.targetLanguage);
+      this.alignment = { sourceCues, targetCues, language: data.targetLanguage, pairs, segments: readingSegments(pairs, data.targetLanguage) };
     }
     const pair = visibleSegment(this.alignment.segments, this.time, segment => this.fitsReadingSegment(segment));
     if (!pair?.source) { this.clearPair(); return; }

@@ -14,7 +14,7 @@ test('identical requests share work; cancelling one subscriber preserves the oth
   a.abort(); await assert.rejects(first, { name: 'AbortError' });
   assert.equal(upstream.aborted, false);
   pending.resolve('real captions'); assert.equal(await second, 'real captions');
-  assert.equal(await pool.request('same', load), 'real captions'); assert.equal(calls, 1);
+  assert.equal(await pool.request('same', async () => { calls++; return 'current captions'; }), 'current captions'); assert.equal(calls, 2);
 });
 
 test('last cancellation aborts upstream and a late response cannot overwrite the replacement', async t => {
@@ -25,7 +25,7 @@ test('last cancellation aborts upstream and a late response cannot overwrite the
   assert.equal(signal.aborted, true);
   const replacement = pool.request('key', async () => 'new');
   old.resolve('stale');
-  assert.equal(await replacement, 'new'); assert.equal(pool.peek('key'), 'new');
+  assert.equal(await replacement, 'new');
 });
 
 test('distinct upstream jobs are serialized and cancelled queued work never starts', async t => {
@@ -40,16 +40,13 @@ test('distinct upstream jobs are serialized and cancelled queued work never star
   assert.equal(await next, 'next'); assert.equal(calls, 1);
 });
 
-test('real 429 rejects queued uncached work; cached work survives and retry is manual', async t => {
+test('real 429 rejects queued work and retry is manual', async t => {
   let now = 0, calls = 0;
   const pool = createRequestPool({ now: () => now, cooldownMs: 1000 }); t.after(pool.close);
-  pool.prime('cached', 'available');
   const failed = pool.request('limited', async () => { throw rateError(); });
   const queued = pool.request('queued', async () => { calls++; });
   await Promise.all([assert.rejects(failed, e => e.code === 'YOUTUBE_RATE_LIMITED'), assert.rejects(queued, e => e.retryAfterSeconds === 1)]);
-  assert.equal(calls, 0);
-  assert.equal(await pool.request('cached', () => { throw new Error('must not load'); }), 'available');
-  now = 1001; await Promise.resolve(); assert.equal(calls, 0);
+  assert.equal(calls, 0); now = 1001;
   await pool.request('queued', async () => { calls++; }); assert.equal(calls, 1);
 });
 
@@ -69,11 +66,8 @@ test('fast work starts while a translation lane job is active', async t => {
   waiting.resolve('translated'); assert.equal(await translation, 'translated');
 });
 
-test('a queued track already supplied by a batch is served without another download', async t => {
-  const pool = createRequestPool(); t.after(pool.close);
-  const pending = deferred(); let extra = 0;
-  const batch = pool.request('target', async () => { await pending.promise; pool.prime('en', 'English'); return '中文'; });
-  const source = pool.request('en', async () => { extra++; return 'redundant'; });
-  pending.resolve();
-  assert.deepEqual(await Promise.all([batch, source]), ['中文', 'English']); assert.equal(extra, 0);
+test('a completed request is not reused as caption evidence', async t => {
+  const pool = createRequestPool(); t.after(pool.close); let calls = 0;
+  assert.equal(await pool.request('en', async () => { calls++; return 'English'; }), 'English');
+  assert.equal(await pool.request('en', async () => { calls++; return 'Current English'; }), 'Current English'); assert.equal(calls, 2);
 });

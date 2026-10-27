@@ -20,7 +20,7 @@ export function createCaptionSession({ videoId, target, signal, cache, requests,
   const events = new AsyncEvents(); let sequence = 0, sourceReady = false, targetAbort;
   const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
   const emit = (type, value = {}) => events.push({ sequence: ++sequence, videoId, target, captionPolicy: policy, type, ...value });
-  const readTrack = (info, language, lane, lifecycle, subscriberSignal = signal, fresh = false) => {
+  const readTrack = (info, language, lane, lifecycle, subscriberSignal = signal) => {
     const selected = selectionFor(info, language), type = targetType(info, language);
     const key = ['track', videoId, language, type, playerTrack(info), JSON.stringify(selected), policy].join(':');
     return requests.request(key, async sharedSignal => {
@@ -28,7 +28,7 @@ export function createCaptionSession({ videoId, target, signal, cache, requests,
       const cues = result?.tracks?.[language];
       if (!Array.isArray(cues) || !cues.length) throw result?.error || new Error('YouTube did not provide the requested caption track.');
       return { cues, selection: result.identities?.[language] || selected };
-    }, subscriberSignal, { lane, fresh });
+    }, subscriberSignal, { lane });
   };
   void (async () => {
     try {
@@ -45,7 +45,7 @@ export function createCaptionSession({ videoId, target, signal, cache, requests,
       }
       if (saved) emit('phase', { phase: 'cache-revalidation-due' });
       emit('phase', { phase: 'metadata-loading' });
-      const info = await getInfo(videoId, signal, { fresh: !!saved });
+      const info = await getInfo(videoId, signal);
       if (!info?.sourceLanguage) throw new Error('This video has no available English captions.');
       if (target !== info.sourceLanguage && !info.languages?.some(item => item.code === target)) throw Object.assign(new Error('This video does not provide the requested caption language.'), { status: 400 });
       const type = targetType(info, target), sourceSelection = selectionFor(info, info.sourceLanguage), targetSelection = selectionFor(info, target);
@@ -64,10 +64,10 @@ export function createCaptionSession({ videoId, target, signal, cache, requests,
       if (!saved && target !== info.sourceLanguage) {
         emit('phase', { phase: 'target-queued' }); targetAbort = new AbortController();
         const targetSignal = AbortSignal.any([signal, targetAbort.signal]);
-        initialTarget = readTrack(info, target, type === 'auto-translated' ? 'translation' : 'fast', phase => { if (phase === 'target-preparing' || phase === 'target-downloading') emit('phase', { phase }); }, targetSignal, false).then(value => ({ value }), error => ({ error }));
+        initialTarget = readTrack(info, target, type === 'auto-translated' ? 'translation' : 'fast', phase => { if (phase === 'target-preparing' || phase === 'target-downloading') emit('phase', { phase }); }, targetSignal).then(value => ({ value }), error => ({ error }));
       }
       emit('phase', { phase: 'source-loading' });
-      const source = await readTrack(info, info.sourceLanguage, 'fast', undefined, signal, !!saved);
+      const source = await readTrack(info, info.sourceLanguage, 'fast');
       const sourceFingerprint = captionCueFingerprint(source.cues);
       sourceReady = true; emit('source-ready', { language: info.sourceLanguage, sourceFingerprint, cues: source.cues });
       if (saved && type === 'auto-translated' && saved.bundle.schema === 3 && saved.bundle.cachePolicy === 'verified-bundle-v1' && saved.bundle.captionPolicy === policy && saved.bundle.source.trackKey === info.sourceLanguage && saved.bundle.source.playerTrack === playerTrack(info) && saved.bundle.source.cueSha256 === sourceFingerprint && same(saved.bundle.source.selection, source.selection) && saved.bundle.targetTrack.type === type && same(saved.bundle.targetTrack.selection, targetSelection)) {
@@ -83,7 +83,7 @@ export function createCaptionSession({ videoId, target, signal, cache, requests,
       } else {
         emit('phase', { phase: 'target-queued' });
         const lane = type === 'auto-translated' ? 'translation' : 'fast';
-        targetResult = await readTrack(info, target, lane, phase => { if (phase === 'target-preparing') emit('phase', { phase }); if (phase === 'target-downloading') emit('phase', { phase }); }, signal, !!saved);
+        targetResult = await readTrack(info, target, lane, phase => { if (phase === 'target-preparing') emit('phase', { phase }); if (phase === 'target-downloading') emit('phase', { phase }); });
       }
       const bundle = makeCaptionBundle({ videoId, target, info, source: { trackKey: info.sourceLanguage, playerTrack: playerTrack(info), selection: source.selection, cues: source.cues }, targetTrack: { type, selection: targetResult.selection, cues: targetResult.cues }, now });
       await cache?.write(bundle, signal);

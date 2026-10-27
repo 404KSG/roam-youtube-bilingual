@@ -9,6 +9,7 @@ import { fetchCaptionTracks } from './captions.mjs';
 import { createRequestPool } from './request-pool.mjs';
 import { createCaptionCache } from './caption-cache.mjs';
 import { createCaptionBundleCache } from './caption-bundle-cache.mjs';
+import { createDisplayInfoLease } from './display-info.mjs';
 import { createCaptionSession } from './caption-session.mjs';
 import { isCaptionTrackKey } from './caption-key.mjs';
 import { fetchVideoInfo } from './video-info.mjs';
@@ -30,10 +31,15 @@ async function readJSON(request) {
   }
   try { return JSON.parse(Buffer.concat(chunks).toString()); } catch { throw Object.assign(new Error('Invalid JSON.'), { status: 400 }); }
 }
-export function makeServer({ port = 17321, captionFetcher, captionBatchFetcher = fetchCaptionTracks, infoFetcher = fetchVideoInfo, nativeCcReader = createCaptionReader(), verifyPeer = createPeerVerifier(), now = Date.now, cooldownMs = 60000, maxSessionBytes = MAX_SESSION_BYTES, captionCache, captionBundleCache } = {}) {
+export function makeServer({ port = 17321, captionFetcher, captionBatchFetcher = fetchCaptionTracks, infoFetcher = fetchVideoInfo, nativeCcReader = createCaptionReader(), verifyPeer = createPeerVerifier(), now = Date.now, cooldownMs = 60000, maxSessionBytes = MAX_SESSION_BYTES, captionCache, captionBundleCache, displayInfoLease } = {}) {
   const requests = createRequestPool({ now, cooldownMs });
-  const getInfo = (id, signal, { fresh = false } = {}) => requests.request(`info:${id}`, sharedSignal => infoFetcher(id, sharedSignal), signal, { lane: 'fast', fresh });
-  const cachedInfo = id => captionBundleCache?.findFreshInfo(id);
+  displayInfoLease ||= createDisplayInfoLease({ now });
+  const acquireCurrentInfo = (id, signal) => requests.request(`info:${id}`, async sharedSignal => displayInfoLease.remember(id, await infoFetcher(id, sharedSignal)), signal, { lane: 'fast' });
+  const resolveDisplayInfo = async (id, signal) => {
+    const leased = displayInfoLease.get(id); if (leased) return leased;
+    const bundled = await captionBundleCache?.findFreshInfo(id); if (bundled) return displayInfoLease.remember(id, bundled);
+    return acquireCurrentInfo(id, signal);
+  };
   // Original/uploaded captions remain fast. Auto-translated captions need a
   // wait AFTER extraction, not a retry delay that generates a fresh URL.
   // See yt-dlp/yt-dlp#13831, maintainer comment 3712613129.
@@ -90,7 +96,7 @@ export function makeServer({ port = 17321, captionFetcher, captionBatchFetcher =
         if (Object.keys(body).some((key) => !['videoId', 'frame'].includes(key)) || !validRect(body.frame)) return json(400, { error: 'Invalid native caption scope.' });
         await verifyPeer(req.socket, actualPort);
         controller.signal.throwIfAborted();
-        const info = await cachedInfo(body.videoId) || await getInfo(body.videoId, controller.signal);
+        const info = await resolveDisplayInfo(body.videoId, controller.signal);
         const result = await nativeCcReader.read({ title: info.title, frame: body.frame, signal: controller.signal });
         const state = ['on', 'off', 'unknown'].includes(result?.state) ? result.state : 'unknown';
         const reasons = new Set(['control', 'controls-hidden', 'native-caption-visible', 'player-not-visible', 'unrecognized-control', 'busy', 'window-not-visible']);
@@ -99,7 +105,7 @@ export function makeServer({ port = 17321, captionFetcher, captionBatchFetcher =
       if (path === '/v1/youtube/caption-session' && !isCaptionTrackKey(body.target)) return json(400, { error: 'Invalid subtitle track identifier.' });
       if (path === '/v1/youtube/caption-session') {
         if (Object.keys(body).some(key => !['videoId', 'target'].includes(key))) return json(400, { error: 'Invalid caption session request.' });
-        const stream = createCaptionSession({ videoId: body.videoId, target: body.target, signal: controller.signal, cache: captionBundleCache, requests, getInfo, loadTracks: readTracks, importLegacy, now });
+        const stream = createCaptionSession({ videoId: body.videoId, target: body.target, signal: controller.signal, cache: captionBundleCache, requests, getInfo: acquireCurrentInfo, loadTracks: readTracks, importLegacy, now });
         res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store' });
         let bytes = 0;
         for await (const event of stream) {
@@ -110,7 +116,7 @@ export function makeServer({ port = 17321, captionFetcher, captionBatchFetcher =
         }
         if (!res.destroyed) res.end(); return;
       }
-      const info = await cachedInfo(body.videoId) || await getInfo(body.videoId, controller.signal);
+      const info = await resolveDisplayInfo(body.videoId, controller.signal);
       if (path === '/v1/youtube/video-info') return json(200, info);
       return json(404, { error: 'Endpoint not found.' });
     } catch (error) {

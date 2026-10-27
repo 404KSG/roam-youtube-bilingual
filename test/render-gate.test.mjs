@@ -12,14 +12,14 @@ import { resolveNativeCc } from '../src/native-cc.mjs';
 // Exercise the real controller methods without constructing browser DOM.
 const source = await readFile(new URL('../src/extension.mjs', import.meta.url), 'utf8');
 const controller = source.slice(source.indexOf('class VideoCaptions {'), source.indexOf('\nfunction scan()'));
-function harness({ request = async () => ({ ok: true }), now = Date.now } = {}) {
+function harness({ request = async () => ({ ok: true }), now = Date.now, CaptionSessionImpl } = {}) {
   const commands = [], videos = new Map();
   const context = { videos, preferences: createSubtitlePreferences(null), validateConfig, AbortController, DOMException, clearTimeout, activeCueIndex, singleLine, alignCaptionTracks, readingSegments, visibleSegment, resolveNativeCc, Date: { now }, settings: null, document: { hidden: false }, SERVICE_URL: 'http://127.0.0.1:17321', VERSION: 'test', encodeURIComponent,
-    CaptionSession: class { constructor({ epoch }) { this.epoch = epoch; } async start() { throw new Error('YouTube 429'); } }, verifyHealth: data => data, request };
+    CaptionSession: CaptionSessionImpl || class { constructor({ epoch }) { this.epoch = epoch; } async start() { throw new Error('YouTube 429'); } }, verifyHealth: data => data, request };
   const Controller = vm.runInNewContext(`${controller}; VideoCaptions`, context);
   const video = Object.create(Controller.prototype);
   Object.assign(video, { enabled: false, wantsEnabled: false, config: { target: 'zh-Hans', fontSize: 20 }, loading: false, disposed: false, epoch: 0, videoId: 'vif8NQcjVf0',
-    tracks: new Map(), box: { hidden: false }, source: { textContent: 'English' }, target: { textContent: '中文' }, noticeBox: {},
+    captionData: null, box: { hidden: false }, source: { textContent: 'English' }, target: { textContent: '中文' }, noticeBox: {},
     clock: { unloadCaptions: () => commands.push('off'), restoreCaptions: () => { assert.equal(video.box.hidden, true); commands.push('restore'); } },
     updateIcon() {}, notice(message) { this.lastNotice = message; },
     loadInfo: async () => ({ sourceLanguage: 'en', languages: [{ code: 'zh-Hans' }] }),
@@ -27,6 +27,9 @@ function harness({ request = async () => ({ ok: true }), now = Date.now } = {}) 
   });
   videos.set({}, video);
   return { video, commands };
+}
+function installCaptionData(video, source, target = null) {
+  const fingerprint = 'a'.repeat(64); video.captionData = { epoch: video.epoch, videoId: video.videoId, targetLanguage: 'zh-Hans', source: { language: 'en', fingerprint, cues: source }, target: target ? { language: 'zh-Hans', sourceFingerprint: fingerprint, pairId: 'b'.repeat(64), cues: target } : null };
 }
 
 test('a failed target download never disables existing native captions', async () => {
@@ -38,6 +41,16 @@ test('a failed target download never disables existing native captions', async (
   assert.equal(video.lastError, 'YouTube 429');
 });
 
+test('post-source stream failure tears down delayed native CC work before it can unload captions', async () => {
+  let resolveCc; class BrokenSession { constructor(args) { Object.assign(this, args); } async start() { const base = { videoId: 'vif8NQcjVf0', target: 'zh-Hans' }; this.onEvent({ ...base, type: 'info', info: { videoId: base.videoId, sourceLanguage: 'en', languages: [] } }, this); this.onEvent({ ...base, type: 'source-ready', language: 'en', sourceFingerprint: 'a'.repeat(64), cues: [{ start: 0, end: 1, text: 'English' }] }, this); throw new Error('truncated'); } }
+  const { video, commands } = harness({ CaptionSessionImpl: BrokenSession, request: (path, _body, signal) => path.endsWith('health') ? Promise.resolve({ ok: true }) : new Promise(resolve => { resolveCc = () => resolve({ videoId: 'vif8NQcjVf0', state: 'on', reason: 'control', checkedAt: Date.now() }); signal.addEventListener('abort', () => {}, { once: true }); }) }); video.wantsEnabled = true; video.surface = { host: { style: { display: 'block' } } }; video.screenFrame = () => ({ x: 0, y: 0, width: 1, height: 1 });
+  await video.turnOn(); resolveCc(); await Promise.resolve(); assert.equal(video.enabled, false); assert.equal(video.captionData, null); assert.deepEqual(commands, []); assert.equal(video.wantsEnabled, true);
+});
+test('post-source failure restores captions when this instance already unloaded them', async () => {
+  class BrokenSession { constructor(args) { Object.assign(this, args); } async start() { const base = { videoId: 'vif8NQcjVf0', target: 'zh-Hans' }; this.onEvent({ ...base, type: 'info', info: { videoId: base.videoId, sourceLanguage: 'en', languages: [] } }, this); this.onEvent({ ...base, type: 'source-ready', language: 'en', sourceFingerprint: 'a'.repeat(64), cues: [{ start: 0, end: 1, text: 'English' }] }, this); await Promise.resolve(); throw new Error('invalid stream'); } }
+  const { video, commands } = harness({ CaptionSessionImpl: BrokenSession, request: async path => path.endsWith('health') ? { ok: true } : { videoId: 'vif8NQcjVf0', state: 'on', reason: 'control', checkedAt: Date.now() } }); video.wantsEnabled = true; video.surface = { host: { style: { display: 'block' } } }; video.screenFrame = () => ({ x: 0, y: 0, width: 1, height: 1 });
+  await video.turnOn(); assert.deepEqual(commands, ['off', 'restore']); assert.equal(video.enabled, false);
+});
 test('a failed restoration keeps the saved ON choice without automatic retries', async () => {
   const { video } = harness(); let attempts = 0;
   video.wantsEnabled = true; video.updateIcon = () => { attempts++; };
@@ -66,8 +79,7 @@ test('English-led grouping does not carry translation from an earlier source seg
   const { video } = harness();
   Object.assign(video, { enabled: true, ccState: 'off', ccVerifiedAt: Date.now(), time: 5, info: { sourceLanguage: 'en' } });
   video.clock.isSynchronized = () => true;
-  video.tracks.set('en', [{ start: 0, end: 2, text: 'Earlier English' }, { start: 2, end: 10, text: 'English sentence' }]);
-  video.tracks.set('zh-Hans', [{ start: 0, end: 2, text: '已过期' }, { start: 2, end: 10, text: '当前译文' }]);
+  installCaptionData(video, [{ start: 0, end: 2, text: 'Earlier English' }, { start: 2, end: 10, text: 'English sentence' }], [{ start: 0, end: 2, text: '已过期' }, { start: 2, end: 10, text: '当前译文' }]);
   video.drawPair = () => {};
   video.updatePair();
   assert.equal(video.pair.source, 'English sentence');
@@ -78,8 +90,7 @@ test('the displayed Chinese paragraph stays fixed while the English segment stay
   const { video } = harness();
   Object.assign(video, { enabled: true, ccState: 'off', ccVerifiedAt: Date.now(), info: { sourceLanguage: 'en' } });
   video.clock.isSynchronized = () => true; video.drawPair = () => {};
-  video.tracks.set('en', [{ start: 0, end: 4, text: 'One English segment' }]);
-  video.tracks.set('zh-Hans', [{ start: 0, end: 1, text: '完整的' }, { start: 1, end: 4, text: '中文段落。' }]);
+  installCaptionData(video, [{ start: 0, end: 4, text: 'One English segment' }], [{ start: 0, end: 1, text: '完整的' }, { start: 1, end: 4, text: '中文段落。' }]);
   for (const time of [.5, 1.5, 3.5]) { video.time = time; video.updatePair(); assert.equal(video.pair.target, '完整的中文段落。'); }
 });
 
@@ -87,8 +98,7 @@ test('a genuinely empty translated segment retains English rather than borrowing
   const { video } = harness();
   Object.assign(video, { enabled: true, ccState: 'off', ccVerifiedAt: Date.now(), time: 5, info: { sourceLanguage: 'en' } });
   video.clock.isSynchronized = () => true; video.drawPair = () => {};
-  video.tracks.set('en', [{ start: 0, end: 2, text: 'Earlier.' }, { start: 2, end: 6, text: 'English without a translation.' }]);
-  video.tracks.set('zh-Hans', [{ start: 0, end: 2, text: '上一句。' }]);
+  installCaptionData(video, [{ start: 0, end: 2, text: 'Earlier.' }, { start: 2, end: 6, text: 'English without a translation.' }], [{ start: 0, end: 2, text: '上一句。' }]);
   video.updatePair();
   assert.equal(video.pair.source, 'English without a translation.'); assert.equal(video.pair.target, '');
 });
@@ -133,7 +143,7 @@ test('a video switch starts fresh metadata and discards the previous late respon
 test('slow process discovery does not invalidate a freshly captured native state', async () => {
   let time = 1000, refreshed = false;
   const { video } = harness({ now: () => time, request: async () => { time = 2900; return { videoId: 'vif8NQcjVf0', state: 'off', reason: 'control', checkedAt: 2850 }; } });
-  video.tracks.set('en', [{ start: 0, end: 1, text: 'English' }]);
+  installCaptionData(video, [{ start: 0, end: 1, text: 'English' }]);
   Object.assign(video, { enabled: true, info: { sourceLanguage: 'en' }, surface: { host: { style: { display: 'block' } } }, screenFrame: () => ({ x: 0, y: 0, width: 800, height: 450 }), updatePair: () => { refreshed = true; } });
   await video.checkNativeCc();
   assert.equal(video.ccState, 'off'); assert.equal(video.ccVerifiedAt, 2850); assert.equal(refreshed, true);
@@ -142,14 +152,14 @@ test('slow process discovery does not invalidate a freshly captured native state
 test('an old snapshot is still rejected even if its response has just arrived', async () => {
   let time = 1000;
   const { video } = harness({ now: () => time, request: async () => { time = 2900; return { videoId: 'vif8NQcjVf0', state: 'off', reason: 'control', checkedAt: 1000 }; } });
-  video.tracks.set('en', [{ start: 0, end: 1, text: 'English' }]);
+  installCaptionData(video, [{ start: 0, end: 1, text: 'English' }]);
   Object.assign(video, { enabled: true, info: { sourceLanguage: 'en' }, surface: { host: { style: { display: 'block' } } }, screenFrame: () => ({ x: 0, y: 0, width: 800, height: 450 }) });
   await video.checkNativeCc(); assert.equal(video.ccState, 'unknown'); assert.equal(video.box.hidden, true);
 });
 
 test('a target error persists through later successful native CC checks while English remains available', async () => {
   const { video } = harness({ request: async () => ({ videoId: 'vif8NQcjVf0', state: 'off', reason: 'control', checkedAt: Date.now() }) });
-  video.tracks.set('en', [{ start: 0, end: 2, text: 'English' }]);
+  installCaptionData(video, [{ start: 0, end: 2, text: 'English' }]);
   Object.assign(video, { enabled: true, info: { sourceLanguage: 'en' }, targetError: 'Translated captions are unavailable; English remains available.', surface: { host: { style: { display: 'block' } } }, screenFrame: () => ({ x: 0, y: 0, width: 800, height: 450 }), updatePair() {} });
   await video.checkNativeCc(); assert.equal(video.targetError, 'Translated captions are unavailable; English remains available.');
 });

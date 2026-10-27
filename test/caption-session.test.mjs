@@ -40,6 +40,16 @@ test('changed player identity, target type, or uploaded target prevents stale ta
     } finally { pool.close(); await rm(directory, { recursive: true, force: true }); }
   }
 });
+test('due automatic bundles invalidate target on actual source-key or source-content change', async t => {
+  for (const mode of ['key', 'content']) {
+    let now = 0; const directory = await mkdtemp(join(tmpdir(), 'ryb-auto-current-')); const cache = createCaptionBundleCache(directory, { now: () => now, freshnessMs: 1 }); await cache.write(pair(now)); now = 2; const pool = createRequestPool(), calls = [];
+    const current = mode === 'key' ? { ...info, sourceLanguage: 'en-ehkg1hFWq8A', sourceSelection: { ...info.sourceSelection, downloadLanguage: 'en-ehkg1hFWq8A' } } : info;
+    assert.deepEqual(current.sourceTrack, info.sourceTrack, 'player identity, including vss_id, is unchanged');
+    try { const events = []; for await (const event of createCaptionSession({ videoId, target: 'zh-Hans', signal: new AbortController().signal, cache, requests: pool, now: () => now, getInfo: async () => current, loadTracks: async (_id, languages, _signal, options) => { const language = languages[0]; calls.push(language); const text = language === current.sourceLanguage ? (mode === 'key' ? 'English' : 'Changed English content') : `${mode}-zh-Hans`; return { tracks: { [language]: [{ start: 0, end: 2, text }] }, identities: { [language]: options.selections[language] } }; } })) events.push(event);
+      assert.equal(events.find(event => event.type === 'source-ready').language, current.sourceLanguage); assert.equal(events.find(event => event.type === 'source-ready').cues[0].text, mode === 'key' ? 'English' : 'Changed English content'); assert.equal(events.find(event => event.type === 'target-ready').cues[0].text, `${mode}-zh-Hans`); assert.deepEqual(calls.sort(), [current.sourceLanguage, 'zh-Hans'].sort());
+    } finally { pool.close(); await rm(directory, { recursive: true, force: true }); }
+  }
+});
 test('a disappeared uploaded target is never served from a due pair', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'ryb-upload-missing-')); t.after(() => rm(directory, { recursive: true, force: true })); let now = 0;
   const uploadedInfo = { ...info, languages: [{ ...info.languages[0], autoTranslated: false }] }, saved = makeCaptionBundle({ videoId, target: 'zh-Hans', info: uploadedInfo, source: { trackKey: 'en', playerTrack: JSON.stringify(uploadedInfo.sourceTrack), selection: select('en'), cues: [{ start: 0, end: 1, text: 'English' }] }, targetTrack: { type: 'uploaded', selection: select('zh-Hans'), cues: [{ start: 0, end: 1, text: 'Old upload' }] }, now: () => now });

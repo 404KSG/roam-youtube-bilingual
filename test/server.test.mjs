@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { makeServer } from '../server/index.mjs';
 import { createCaptionCache } from '../server/caption-cache.mjs';
 import { createCaptionBundleCache, makeCaptionBundle } from '../server/caption-bundle-cache.mjs';
+import { createDisplayInfoLease } from '../server/display-info.mjs';
 import { sanitizeVideoInfo } from '../server/video-info.mjs';
 import { namedTrackMetadata, namedEnglishKey } from './caption-fixtures.mjs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -77,6 +78,82 @@ test('HTTP disconnect and response-limit abort cancel active caption session wor
   const controller = new AbortController(); const response = await fetch(base + '/v1/youtube/caption-session', { ...post({ videoId: id, target: 'zh-Hans' }), signal: controller.signal }); controller.abort(); await delay(20); assert.equal(response.status, 200); assert.equal(disconnected, true);
   let limited = false; const limitedBase = await fixture(t, { maxSessionBytes: 1000, captionFetcher: async (_id, language, signal) => language === 'en' ? [{ start: 0, end: 1, text: 'English' }] : new Promise((_resolve, reject) => signal.addEventListener('abort', () => { limited = true; reject(new DOMException('Aborted', 'AbortError')); }, { once: true })) });
   await fetch(limitedBase + '/v1/youtube/caption-session', post({ videoId: id, target: 'zh-Hans' })); await delay(20); assert.equal(limited, true);
+});
+test('a target-B miss uses current acquisition even while target-A display metadata is leased', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'ryb-target-b-current-')); t.after(() => rm(directory, { recursive: true, force: true })); let now = 0, metadata = 0, generation = 0;
+  const cache = createCaptionBundleCache(directory, { now: () => now, freshnessMs: 1 }); const lease = createDisplayInfoLease({ now: () => now, idleMs: 100 });
+  const current = () => generation ? { ...info, title: 'Current B', sourceLanguage: 'en-alt', sourceTrack: { ...info.sourceTrack, languageCode: 'en-alt' }, sourceSelection: { ...selection('en-alt'), identity: { ...selection('en-alt').identity, lang: 'en-alt' } }, languages: [{ code: 'zh-Hans', name: 'Chinese', autoTranslated: true, selection: { ...selection('zh-Hans'), identity: { ...selection('zh-Hans').identity, lang: 'en-alt' } } }, { code: 'ja', name: 'Japanese', autoTranslated: true, selection: { ...selection('ja'), identity: { ...selection('ja').identity, lang: 'en-alt' } } }] } : info;
+  const calls = []; const base = await fixture(t, { now: () => now, captionBundleCache: cache, displayInfoLease: lease, infoFetcher: async () => { metadata++; return current(); }, captionFetcher: async (_id, language) => { calls.push({ generation, language }); return [{ start: 0, end: 1, text: `${generation}-${language}` }]; } });
+  const events = async target => (await (await fetch(base + '/v1/youtube/caption-session', post({ videoId: id, target }))).text()).trim().split('\n').map(JSON.parse);
+  await events('zh-Hans'); now = 2; generation = 1; const targetB = await events('ja');
+  assert.equal(metadata, 2); assert.equal(targetB.find(event => event.type === 'source-ready').language, 'en-alt'); assert.equal(targetB.find(event => event.type === 'source-ready').cues[0].text, '1-en-alt'); assert.equal(targetB.find(event => event.type === 'target-ready').cues[0].text, '1-ja'); assert.deepEqual(calls.filter(call => call.generation === 1).map(call => call.language).sort(), ['en-alt', 'ja']);
+});
+test('expired display lease and due bundle make video-info acquire current metadata', async t => {
+  let now = 0, calls = 0, title = 'Old'; const directory = await mkdtemp(join(tmpdir(), 'ryb-expired-display-')); t.after(() => rm(directory, { recursive: true, force: true }));
+  const cache = createCaptionBundleCache(directory, { now: () => now, freshnessMs: 1 }); const lease = createDisplayInfoLease({ now: () => now, idleMs: 1 }); const base = await fixture(t, { now: () => now, captionBundleCache: cache, displayInfoLease: lease, infoFetcher: async () => { calls++; return { ...info, title }; } });
+  assert.equal((await (await fetch(base + '/v1/youtube/video-info', post({ videoId: id }))).json()).title, 'Old'); now = 2; title = 'New'; assert.equal((await (await fetch(base + '/v1/youtube/video-info', post({ videoId: id }))).json()).title, 'New'); assert.equal(calls, 2);
+});
+test('native CC polls reuse display metadata during a held target and after source-only failure', { timeout: 5000 }, async t => {
+  let now = 1000, metadataCalls = 0, nativeReads = 0, failTarget;
+  const controller = new AbortController(); t.after(() => controller.abort());
+  const base = await fixture(t, {
+    now: () => now,
+    infoFetcher: async () => { metadataCalls++; return info; },
+    captionFetcher: async (_id, language, signal) => {
+      if (language === 'en') return [{ start: 0, end: 2, text: 'Verified English' }];
+      return new Promise((_resolve, reject) => {
+        failTarget = () => reject(Object.assign(new Error('YouTube limited the target'), { code: 'YOUTUBE_RATE_LIMITED', status: 429 }));
+        signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+      });
+    },
+    nativeCcReader: { read: async ({ title }) => { assert.equal(title, info.title); nativeReads++; return { state: 'off' }; } },
+  });
+  const response = await fetch(base + '/v1/youtube/caption-session', { ...post({ videoId: id, target: 'zh-Hans' }), signal: controller.signal });
+  const reader = response.body.getReader(), decoder = new TextDecoder(), events = []; let buffer = '';
+  const readChunk = async () => {
+    const part = await reader.read();
+    buffer += decoder.decode(part.value || new Uint8Array(), { stream: !part.done });
+    let newline; while ((newline = buffer.indexOf('\n')) >= 0) { const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1); if (line) events.push(JSON.parse(line)); }
+    return part.done;
+  };
+  while (!events.some(event => event.type === 'source-ready')) assert.equal(await readChunk(), false);
+  assert.equal(typeof failTarget, 'function');
+  const poll = async () => {
+    now += 700;
+    const state = await fetch(base + '/v1/youtube/native-cc-state', post({ videoId: id, frame }));
+    assert.equal(state.status, 200); assert.equal((await state.json()).state, 'off');
+    assert.equal(metadataCalls, 1, 'native polling must not launch another metadata acquisition');
+  };
+  for (let i = 0; i < 5; i++) await poll();
+  assert.equal(events.some(event => event.type === 'target-ready'), false);
+  failTarget(); while (!await readChunk()) { /* Drain the finite error/complete stream. */ }
+  assert.equal(events.at(-1).outcome, 'source-only');
+  assert.equal(events.find(event => event.type === 'target-error').code, 'YOUTUBE_RATE_LIMITED');
+  for (let i = 0; i < 5; i++) await poll();
+  assert.equal(nativeReads, 10); assert.equal(metadataCalls, 1);
+});
+test('fresh bundle and settings remain available during a different video upstream cooldown', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'ryb-warm-cooldown-')); t.after(() => rm(directory, { recursive: true, force: true }));
+  const cache = createCaptionBundleCache(directory);
+  await cache.write(makeCaptionBundle({ videoId: id, target: 'zh-Hans', info,
+    source: { trackKey: 'en', playerTrack: JSON.stringify(info.sourceTrack), selection: info.sourceSelection, cues: [{ start: 0, end: 2, text: 'Cached English' }] },
+    targetTrack: { type: 'auto-translated', selection: info.languages[0].selection, cues: [{ start: 0, end: 2, text: '缓存中文' }] },
+  }));
+  let metadataCalls = 0, downloads = 0;
+  const base = await fixture(t, { captionBundleCache: cache,
+    infoFetcher: async () => { metadataCalls++; throw Object.assign(new Error('Upstream limited'), { code: 'YOUTUBE_RATE_LIMITED', status: 429 }); },
+    captionFetcher: async () => { downloads++; throw new Error('No download is expected'); },
+  });
+  const session = async videoId => (await (await fetch(base + '/v1/youtube/caption-session', post({ videoId, target: 'zh-Hans' }))).text()).trim().split('\n').map(JSON.parse);
+  assert.equal((await session('dQw4w9WgXcQ')).at(-1).code, 'YOUTUBE_RATE_LIMITED');
+  const warm = await session(id);
+  assert.equal(warm.find(event => event.type === 'source-ready').cues[0].text, 'Cached English');
+  assert.equal(warm.find(event => event.type === 'target-ready').cues[0].text, '缓存中文');
+  assert.equal(warm.at(-1).outcome, 'bilingual');
+  assert.equal((await fetch(base + '/v1/youtube/video-info', post({ videoId: id }))).status, 200);
+  assert.equal((await fetch(base + '/v1/youtube/native-cc-state', post({ videoId: id, frame }))).status, 200);
+  assert.equal((await fetch(base + '/v1/youtube/video-info', post({ videoId: 'M7lc1UVf-VE' }))).status, 429);
+  assert.equal(metadataCalls, 1); assert.equal(downloads, 0);
 });
 test('valid legacy v2 source and target records import without target redownload', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'ryb-legacy-import-')); t.after(() => rm(directory, { recursive: true, force: true }));

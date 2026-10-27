@@ -7,7 +7,9 @@
 - Replace client caption retrieval with one cancellable NDJSON caption session. English reaches the existing single renderer after a fresh CC-off confirmation while translation continues; target errors retain verified English and never switch off global preferences.
 - Reserve separate bounded fast and translation lanes. Cache/metadata/original work can proceed during a translation preparation job; real 429 cooldown, single-flight, and final-subscriber cancellation remain shared.
 - Progress now comes from helper lifecycle phases and uses compact English status strings without an invented one-minute countdown.
-- Automated mocked coverage includes warm helper restart/no-upstream session and native-CC paths, pair-digest tampering, cache freshness/retention guards, source-only target failures, and fast-lane independence. Real YouTube/Roam acceptance remains separate.
+- Keep completed caption reuse in verified bundles and rendering data in the active session. Display-only metadata leases cannot validate new pairs. Stream failures use the same native-caption restoration and cancellation teardown as OFF.
+- Passed 146 Node tests and 95 isolated browser checks, including stale-target isolation, source changes, native polling, cooldown access, and post-source failure cleanup.
+- In one real named-track test, English arrived in 3.97 seconds and Chinese in 65.21 seconds. A separate helper process returned both cached tracks in 33 milliseconds with all upstream calls forbidden. Legacy v2 migration used one metadata lookup and no subtitle downloads. These are API/client-parser timings, not Roam paint times or universal cold-start guarantees.
 
 ## 0.5.0-beta.14 — 命名字幕轨道兼容
 
