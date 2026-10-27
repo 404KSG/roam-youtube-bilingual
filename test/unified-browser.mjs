@@ -79,8 +79,18 @@ export async function runUnifiedAcceptance(options = {}) {
     await wait(() => !root().querySelector('.ryb-caption-box').hidden);
     const box = root().querySelector('.ryb-caption-box'), a = root().querySelector('.ryb-source'), b = root().querySelector('.ryb-target');
     assert(a.textContent === source && b.hidden, 'English appears through the CC-off gate while the target stream is pending');
+    const progress = root().querySelector('.ryb-notice'), progressSince = performance.now();
+    const checksBeforeWait = calls.filter(call => call.path.endsWith('native-cc-state')).length;
+    await wait(() => performance.now() - progressSince > 6200 && calls.filter(call => call.path.endsWith('native-cc-state')).length > checksBeforeWait + 2);
+    assert(!progress.hidden && progress.dataset.kind === 'loading' && progress.textContent === 'Loading translation…', 'translation loading stays visible beyond the old timeout and repeated CC-off checks');
+    const progressRect = progress.getBoundingClientRect();
+    assert(progressRect.width <= 261 && progressRect.height <= 32 && getComputedStyle(progress).pointerEvents === 'none', 'persistent progress is compact and does not intercept player controls');
+    icon.click(); await wait(() => !!setting()?.querySelector('[role=status]'));
+    assert(setting().querySelector('[role=status]').textContent === 'Loading translation…', 'settings show current progress instead of a stale native-CC warning'); done();
+    if (options.capturePending) { held = true; window.__unifiedFixtureCleanup = () => { releaseTarget(); cleanup(); }; return { ...results, screenshotUsesMockData: true }; }
     releaseTarget(); holdTarget = false;
     await wait(() => b.textContent === '第一行中文第二行中文' && !b.hidden);
+    assert(progress.hidden, 'the loading indicator disappears when the verified target is ready');
     clock(3);
     assert(b.textContent === '第一行中文第二行中文', 'Chinese stays stable through its former fragment boundary');
     clock(4.5);
@@ -113,9 +123,11 @@ export async function runUnifiedAcceptance(options = {}) {
     const afterReturnedFailure = calls.filter(call => call.path.endsWith('native-cc-state')).length;
     await wait(() => calls.filter(call => call.path.endsWith('native-cc-state')).length >= afterReturnedFailure + 2);
     assert(!box.hidden && a.textContent === source && b.hidden, 'a failed returned target cannot resurrect the previously cached translation after later CC checks');
+    assert(!progress.hidden && progress.dataset.kind === 'error' && /unavailable/i.test(progress.textContent), 'a failed translation replaces the spinner with a persistent error indicator');
     icon.click(); await wait(() => setting()?.querySelector('input[type=checkbox]'));
     setting().querySelector('input[type=checkbox]').checked = false; setting().querySelector('input[type=checkbox]').dispatchEvent(new Event('change'));
     assert(box.hidden && icon.dataset.active === 'false', 'OFF discards the returned session before same-target re-enable');
+    assert(progress.hidden, 'OFF also removes persistent progress or error feedback');
     source = 'Re-enabled English belongs to a new source.'; sourceVersion = 2; targetFailure = false;
     targets['zh-Hans'] = ['新的中文', '来自当前英文'];
     setting().querySelector('input[type=checkbox]').checked = true; setting().querySelector('input[type=checkbox]').dispatchEvent(new Event('change')); done(); clock(1);

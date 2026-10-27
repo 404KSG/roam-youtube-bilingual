@@ -80,7 +80,9 @@ export function createSettingsPopover(owner, { css, version, save, onClose }) {
     for (const [key, field] of fields) if (document.activeElement !== host || shadow.activeElement !== field) field.value = String(owner.config[key]);
     for (const [key, buttons] of swatches) for (const button of buttons) button.setAttribute('aria-pressed', String(button.dataset.color === owner.config[key]));
     for (const [key, editor] of editors) editor.trigger.style.setProperty('--swatch', owner.config[key]);
-    status.textContent = owner.loading ? owner.noticeBox.textContent || 'Preparing subtitles…' : owner.targetError || owner.lastError || owner.nativeError || owner.preferenceError || owner.preferenceNotice || '';
+    const message = owner.statusMessage?.() ?? (owner.loading ? owner.noticeBox.textContent || 'Preparing subtitles…' : owner.targetError || owner.lastError || owner.nativeError || owner.preferenceError || owner.preferenceNotice || '');
+    if (status.textContent !== message) status.textContent = message;
+    status.dataset.kind = owner.targetError || owner.lastError || owner.nativeError || owner.preferenceError || owner.ccState === 'on' ? 'error' : owner.loading ? 'loading' : 'info';
   };
   ref.refresh = () => {
     if (ref.closed) return;

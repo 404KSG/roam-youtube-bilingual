@@ -8,18 +8,19 @@ import { createSubtitlePreferences } from '../src/preferences.mjs';
 import { alignCaptionTracks } from '../src/alignment.mjs';
 import { readingSegments, visibleSegment } from '../src/reading.mjs';
 import { resolveNativeCc } from '../src/native-cc.mjs';
+import { phaseMessage } from '../src/caption-session.mjs';
 
 // Exercise the real controller methods without constructing browser DOM.
 const source = await readFile(new URL('../src/extension.mjs', import.meta.url), 'utf8');
 const controller = source.slice(source.indexOf('class VideoCaptions {'), source.indexOf('\nfunction scan()'));
-function harness({ request = async () => ({ ok: true }), now = Date.now, CaptionSessionImpl } = {}) {
+function harness({ request = async () => ({ ok: true }), now = Date.now, CaptionSessionImpl, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
   const commands = [], videos = new Map();
-  const context = { videos, preferences: createSubtitlePreferences(null), validateConfig, AbortController, DOMException, clearTimeout, activeCueIndex, singleLine, alignCaptionTracks, readingSegments, visibleSegment, resolveNativeCc, Date: { now }, settings: null, document: { hidden: false }, SERVICE_URL: 'http://127.0.0.1:17321', VERSION: 'test', encodeURIComponent,
+  const context = { videos, preferences: createSubtitlePreferences(null), validateConfig, AbortController, DOMException, setTimeout: setTimer, clearTimeout: clearTimer, activeCueIndex, singleLine, alignCaptionTracks, readingSegments, visibleSegment, resolveNativeCc, phaseMessage, Date: { now }, settings: null, document: { hidden: false }, SERVICE_URL: 'http://127.0.0.1:17321', VERSION: 'test', encodeURIComponent,
     CaptionSession: CaptionSessionImpl || class { constructor({ epoch }) { this.epoch = epoch; } async start() { throw new Error('YouTube 429'); } }, verifyHealth: data => data, request };
   const Controller = vm.runInNewContext(`${controller}; VideoCaptions`, context);
   const video = Object.create(Controller.prototype);
   Object.assign(video, { enabled: false, wantsEnabled: false, config: { target: 'zh-Hans', fontSize: 20 }, loading: false, disposed: false, epoch: 0, videoId: 'vif8NQcjVf0',
-    captionData: null, box: { hidden: false }, source: { textContent: 'English' }, target: { textContent: '中文' }, noticeBox: {},
+    captionData: null, box: { hidden: false }, source: { textContent: 'English' }, target: { textContent: '中文' }, noticeBox: { dataset: {} },
     clock: { unloadCaptions: () => commands.push('off'), restoreCaptions: () => { assert.equal(video.box.hidden, true); commands.push('restore'); } },
     updateIcon() {}, notice(message) { this.lastNotice = message; },
     loadInfo: async () => ({ sourceLanguage: 'en', languages: [{ code: 'zh-Hans' }] }),
@@ -164,6 +165,59 @@ test('a target error persists through later successful native CC checks while En
   await video.checkNativeCc(); assert.equal(video.targetError, 'Translated captions are unavailable; English remains available.');
 });
 
+test('CC-off confirmation does not erase the pending translation indicator', async () => {
+  const { video } = harness({ request: async () => ({ videoId: 'vif8NQcjVf0', state: 'off', reason: 'control', checkedAt: Date.now() }) });
+  installCaptionData(video, [{ start: 0, end: 2, text: 'English' }]);
+  Object.assign(video, { enabled: true, loading: true, surface: { host: { style: { display: 'block' } } }, screenFrame: () => ({ x: 0, y: 0, width: 800, height: 450 }), updatePair() {} });
+  delete video.notice;
+  video.notice('Loading translation…', 0);
+  await video.checkNativeCc();
+  assert.equal(video.noticeBox.hidden, false);
+  assert.equal(video.noticeBox.textContent, 'Loading translation…');
+});
+test('an old transient timer cannot hide loading and OFF clears the persistent indicator', () => {
+  const timers = new Map(); let next = 0;
+  const { video } = harness({ setTimer: fn => { timers.set(++next, fn); return next; }, clearTimer: id => timers.delete(id) });
+  delete video.notice;
+  video.notice('Earlier transient message'); const oldTimer = [...timers.values()][0];
+  installCaptionData(video, [{ start: 0, end: 2, text: 'English' }]);
+  video.enabled = true; video.loading = true;
+  video.notice('Checking that native captions are off…');
+  assert.equal(timers.size, 0, 'pending translation must not have an auto-hide timer');
+  oldTimer();
+  assert.equal(video.noticeBox.hidden, false);
+  assert.equal(video.noticeBox.textContent, 'Loading translation…');
+  video.turnOff(); assert.equal(video.noticeBox.hidden, true);
+});
+test('translation failure replaces loading and survives subsequent CC checks', async () => {
+  const { video } = harness({ request: async () => ({ videoId: 'vif8NQcjVf0', state: 'off', reason: 'control', checkedAt: Date.now() }) });
+  const session = { epoch: 0 }; installCaptionData(video, [{ start: 0, end: 2, text: 'English' }]);
+  Object.assign(video, { enabled: true, loading: true, wantsEnabled: true, session, surface: { host: { style: { display: 'block' } } }, screenFrame: () => ({ x: 0, y: 0, width: 800, height: 450 }), updatePair() {} });
+  video.captionData.owner = session; delete video.notice;
+  video.handleSessionEvent({ type: 'target-error', message: 'YouTube returned HTTP 429.' }, session);
+  await video.checkNativeCc();
+  assert.equal(video.loading, false); assert.equal(video.noticeBox.hidden, false);
+  assert.equal(video.noticeBox.dataset.kind, 'error'); assert.doesNotMatch(video.noticeBox.textContent, /loading|queued/i);
+  assert.equal(video.statusMessage(), 'YouTube returned HTTP 429.'); assert.equal(video.wantsEnabled, true);
+});
+test('target-ready removes loading even when this particular cue has no translation', () => {
+  const { video } = harness(); const session = { epoch: 0 };
+  installCaptionData(video, [{ start: 0, end: 2, text: 'English without a matching target cue' }]);
+  Object.assign(video, { enabled: true, loading: true, session, ccState: 'off', ccVerifiedAt: Date.now(), time: 1 });
+  video.captionData.owner = session; video.clock.isSynchronized = () => true; video.drawPair = () => {}; delete video.notice;
+  video.notice('Loading translation…');
+  video.handleSessionEvent({ type: 'target-ready', language: 'zh-Hans', sourceFingerprint: 'a'.repeat(64), pairId: 'b'.repeat(64), cues: [{ start: 10, end: 12, text: 'Later target' }] }, session);
+  assert.equal(video.noticeBox.hidden, true); assert.equal(video.loadingMessage(), '');
+  assert.equal(video.pair.target, '', 'an actual upstream gap is not presented as pending download');
+});
+test('settings progress drops the old native-CC warning after an off confirmation', async () => {
+  const { video } = harness({ request: async () => ({ videoId: 'vif8NQcjVf0', state: 'off', reason: 'control', checkedAt: Date.now() }) });
+  installCaptionData(video, [{ start: 0, end: 2, text: 'English' }]);
+  Object.assign(video, { enabled: true, loading: true, ccState: 'on', surface: { host: { style: { display: 'block' } } }, screenFrame: () => ({ x: 0, y: 0, width: 800, height: 450 }), updatePair() {} });
+  assert.match(video.statusMessage(), /Native captions are still on/);
+  await video.checkNativeCc();
+  assert.equal(video.statusMessage(), 'Loading translation…');
+});
 test('an expired CC-off confirmation cannot keep the overlay visible', () => {
   const { video } = harness();
   Object.assign(video, { enabled: true, ccState: 'off', ccVerifiedAt: Date.now() - 2000, pair: { source: 'English', target: '中文' } });

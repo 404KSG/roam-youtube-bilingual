@@ -127,14 +127,42 @@ class VideoCaptions {
     if (target !== this.fallback && this.fallback) { this.fallback.remove(); this.fallback = null; }
   }
   updateIcon() { this.toolbarButton.dataset.active = String(this.wantsEnabled); this.toolbarButton.dataset.loading = String(this.loading); this.toolbarButton.setAttribute('aria-busy', String(this.loading)); this.toolbarButton.title = this.loading ? 'Preparing subtitles. Open settings to cancel.' : 'Bilingual subtitle settings'; }
-  notice(message, duration = 6000) {
+  loadingMessage() {
+    if (!this.enabled || !this.loading || this.captionData?.target) return '';
+    if (this.captionData?.source) {
+      if (this.targetPhase === 'target-queued') return 'Translation queued…';
+      if (this.targetPhase === 'target-downloading') return 'Downloading translation…';
+      return 'Loading translation…';
+    }
+    return phaseMessage(this.loadingPhase) || 'Loading subtitles…';
+  }
+  statusMessage() {
+    const pending = this.loadingMessage();
+    const native = this.enabled && this.captionData?.source ? this.nativeError || (this.ccState === 'on' ? 'Native captions are still on. Bilingual subtitles remain hidden.' : !pending && this.ccState !== 'off' ? 'Checking that native captions are off…' : '') : '';
+    return this.targetError || this.lastError || [pending, native, this.preferenceError].filter(Boolean).join(' ') || this.preferenceNotice || '';
+  }
+  refreshStatusNotice() {
+    const pending = this.loadingMessage();
+    if (pending) this.notice(pending, 0, 'loading');
+    else if (this.enabled && this.targetError) this.notice('Translation unavailable. Open settings for details.', 0, 'error');
+    else { clearTimeout(this.noticeTimer); this.noticeBox.hidden = true; this.lastNoticeKey = null; }
+    if (settings?.owner === this) settings.refresh?.();
+  }
+  notice(message, duration = 6000, kind = 'info') {
     if (this.disposed) return;
-    if (settings?.owner === this && settings.status) settings.status.textContent = message;
-    const key = `${this.epoch}:${message}`;
+    const pending = this.loadingMessage();
+    if (pending) { message = pending; duration = 0; kind = 'loading'; }
+    else if (this.enabled && this.targetError) { message = 'Translation unavailable. Open settings for details.'; duration = 0; kind = 'error'; }
+    if (settings?.owner === this && settings.status) {
+      const status = this.statusMessage() || message;
+      if (settings.status.textContent !== status) settings.status.textContent = status;
+    }
+    const key = `${this.epoch}:${kind}:${duration}:${message}`;
     if (this.lastNoticeKey === key) return;
     this.lastNoticeKey = key;
     clearTimeout(this.noticeTimer); this.noticeBox.textContent = message; this.noticeBox.hidden = !message;
-    if (duration) this.noticeTimer = setTimeout(() => { this.noticeBox.hidden = true; }, duration);
+    if (this.noticeBox.dataset) this.noticeBox.dataset.kind = kind;
+    if (duration) this.noticeTimer = setTimeout(() => { if (this.lastNoticeKey === key) this.noticeBox.hidden = true; }, duration);
   }
   cancelInfo() {
     const task = this.infoTask; this.infoTask = null; task?.abort.abort();
@@ -201,27 +229,31 @@ class VideoCaptions {
   }
   handleSessionEvent(event, session) {
     if (this.disposed || this.session !== session || session.epoch !== this.epoch) return;
-    if (event.type === 'phase') { const message = phaseMessage(event.phase); if (message) this.notice(message); return; }
+    if (event.type === 'phase') {
+      this.loadingPhase = event.phase;
+      if (event.phase.startsWith('target-')) this.targetPhase = event.phase;
+      this.refreshStatusNotice(); return;
+    }
     const data = this.captionData;
     if (event.type === 'info') { this.info = event.info; session.info = event.info; if (data?.owner === session) data.info = event.info; settings?.refresh?.(); return; }
     if (event.type === 'source-ready') {
       if (!data || data.owner !== session || data.epoch !== this.epoch || data.videoId !== this.videoId || !this.info || event.language !== this.info.sourceLanguage) throw new Error('The English captions do not match the active video.');
       data.source = { language: event.language, fingerprint: event.sourceFingerprint, cues: event.cues }; data.target = null; this.alignment = null; session.sourceFingerprint = event.sourceFingerprint;
-      this.connect(); this.closeNativeGate(); this.notice('Checking that native captions are off…'); void this.checkNativeCc(); return;
+      this.connect(); this.closeNativeGate(); this.refreshStatusNotice(); void this.checkNativeCc(); return;
     }
     if (event.type === 'target-ready') {
       if (!data || data.owner !== session || data.epoch !== this.epoch || data.videoId !== this.videoId || event.language !== data.targetLanguage || event.sourceFingerprint !== data.source?.fingerprint) throw new Error('The translated captions do not match the active English source.');
-      this.targetError = ''; data.target = { language: event.language, sourceFingerprint: event.sourceFingerprint, pairId: event.pairId, cues: event.cues }; this.alignment = null; this.loading = false; this.updateIcon(); this.updatePair(); this.notice('Subtitles ready.'); return;
+      this.targetError = ''; data.target = { language: event.language, sourceFingerprint: event.sourceFingerprint, pairId: event.pairId, cues: event.cues }; this.alignment = null; this.loading = false; this.updateIcon(); this.updatePair(); this.refreshStatusNotice(); return;
     }
-    if (event.type === 'target-error') { if (data?.owner === session) { data.target = null; this.alignment = null; } this.loading = false; this.targetError = event.message; this.updateIcon(); this.updatePair(); this.notice(event.message); settings?.refresh?.(); return; }
+    if (event.type === 'target-error') { if (data?.owner === session) { data.target = null; this.alignment = null; } this.loading = false; this.targetError = event.message; this.updateIcon(); this.updatePair(); this.refreshStatusNotice(); return; }
     if (event.type === 'fatal-error') throw Object.assign(new Error(event.message), { code: event.code });
-    if (event.type === 'complete') { this.loading = false; this.updateIcon(); if (event.outcome === 'bilingual') { this.lastError = ''; this.notice('Subtitles ready.'); } }
+    if (event.type === 'complete') { this.loading = false; this.updateIcon(); if (event.outcome === 'bilingual') this.lastError = ''; this.refreshStatusNotice(); }
   }
   async turnOn() {
     if (this.enabled || this.disposed) return;
     this.restoreAttempted = true;
     for (const video of videos.values()) if (video !== this && video.enabled) { video.turnOff(); video.restoreAttempted = false; }
-    this.turnOff(); this.enabled = true; this.loading = true; this.lastError = ''; this.targetError = ''; this.nativeError = '';
+    this.turnOff(); this.enabled = true; this.loading = true; this.loadingPhase = 'cache-reading'; this.targetPhase = ''; this.lastError = ''; this.targetError = ''; this.nativeError = '';
     const target = this.config.target, epoch = this.epoch, abort = this.startRequest = new AbortController();
     this.updateIcon(); this.notice('Reading saved subtitles…');
     try {
@@ -248,7 +280,7 @@ class VideoCaptions {
     // Restore only a state this instance positively observed and then changed.
     if (this.nativeChanged && this.nativeWasOn === true) this.clock?.restoreCaptions();
     this.nativeChanged = false; this.nativeWasOn = null;
-    clearTimeout(this.noticeTimer); this.noticeBox.hidden = true; this.updateIcon();
+    clearTimeout(this.noticeTimer); this.noticeBox.hidden = true; this.loadingPhase = ''; this.targetPhase = ''; this.lastNoticeKey = null; this.updateIcon();
   }
   async changeTarget() {
     const restart = this.wantsEnabled;
@@ -278,12 +310,13 @@ class VideoCaptions {
           this.nativeWasOn ??= true; this.nativeChanged = true;
           this.clock?.unloadCaptions(); this.notice('Native captions are still on. Bilingual subtitles remain hidden.');
         } else if (data.reason === 'controls-hidden') this.clock?.wakeCaptionControls();
+        if (settings?.owner === this) settings.refresh?.();
         return;
       }
       this.nativeWasOn ??= false; this.ccVerifiedAt = data.checkedAt;
-      this.noticeBox.hidden = true; this.lastNoticeKey = null; this.nativeError = ''; this.updatePair();
+      this.nativeError = ''; this.refreshStatusNotice(); this.updatePair();
     } catch (error) {
-      if (error.name !== 'AbortError' && epoch === this.epoch) { this.ccState = 'unknown'; this.clearPair(); this.nativeError = error.message; this.notice(error.message); this.nextCcCheck = Date.now() + 2000; }
+      if (error.name !== 'AbortError' && epoch === this.epoch) { this.ccState = 'unknown'; this.clearPair(); this.nativeError = error.message; this.notice(error.message); if (settings?.owner === this) settings.refresh?.(); this.nextCcCheck = Date.now() + 2000; }
     } finally { if (this.ccRequest === abort) this.ccRequest = null; }
   }
   updatePair() {
