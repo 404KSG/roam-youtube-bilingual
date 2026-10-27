@@ -10,9 +10,9 @@ import { isCaptionTrackKey } from './caption-key.mjs';
 const execute = promisify(execFile);
 export function captionDownloadError(error) {
   if (/HTTP[^\n]{0,30}429|Too Many Requests/i.test(String(error.stderr || error.message || ''))) {
-    return Object.assign(new Error('YouTube returned HTTP 429. The requested captions are unavailable; the bilingual overlay is hidden.'), { status: 429, code: 'YOUTUBE_RATE_LIMITED' });
+    return Object.assign(new Error('YouTube returned HTTP 429 while loading captions. Retry later.'), { status: 429, code: 'YOUTUBE_RATE_LIMITED' });
   }
-  return Object.assign(new Error('YouTube caption download failed. The bilingual overlay is hidden.'), { code: 'YOUTUBE_DOWNLOAD_FAILED' });
+  return Object.assign(new Error('YouTube caption download failed.'), { code: 'YOUTUBE_DOWNLOAD_FAILED' });
 }
 export async function fetchCaptionMetadata(videoId, signal, { exec = execute } = {}) {
   if (!/^[\w-]{11}$/.test(videoId || '')) throw new Error('Invalid YouTube video ID.');
@@ -31,7 +31,7 @@ export async function fetchCaptionMetadata(videoId, signal, { exec = execute } =
 // Keep extraction, preparation and download in the SAME yt-dlp process. Use
 // its native manual-source aliases, then verify the actual selected identities.
 // No signed-URL files, cookie export, retry fallback or alternate translators.
-export async function fetchCaptionTracks(videoId, languages, signal, { exec = execute, waitSeconds = 0, sourceLanguage, expectedSourceTrack, selections } = {}) {
+export async function fetchCaptionTracks(videoId, languages, signal, { exec = execute, waitSeconds = 0, sourceLanguage, expectedSourceTrack, selections, lifecycle } = {}) {
   if (!/^[\w-]{11}$/.test(videoId || '')) throw new Error('Invalid YouTube video ID.');
   if (!Array.isArray(languages) || !languages.length || languages.length > 2 || languages.some(language => !isCaptionTrackKey(language))) throw new Error('Invalid subtitle track identifier.');
   if (!Number.isFinite(waitSeconds) || waitSeconds < 0 || waitSeconds > 60) throw new Error('Invalid caption preparation delay.');
@@ -60,6 +60,7 @@ export async function fetchCaptionTracks(videoId, languages, signal, { exec = ex
     const downloadLanguages = [...new Set(languages.map(language => plan[language].downloadLanguage))];
     let failure, stdout = '';
     try {
+      if (waitSeconds) lifecycle?.('target-preparing');
       ({ stdout } = await exec(process.env.YT_DLP_PATH || 'yt-dlp', [
         '--ignore-config', '--no-playlist', '--skip-download', '--no-simulate', '--abort-on-error', '--no-warnings',
         '--print', '%(.{id,requested_subtitles})j', '--write-subs', '--write-auto-subs', '--sub-langs', `^(?:${downloadLanguages.join('|')})$`,
@@ -75,7 +76,7 @@ export async function fetchCaptionTracks(videoId, languages, signal, { exec = ex
     signal?.throwIfAborted();
     let observed;
     try { observed = JSON.parse(stdout.trim()); } catch { /* Unverified source files cannot be cached or displayed. */ }
-    const files = await readdir(folder), tracks = {};
+    const files = await readdir(folder), tracks = {}, identities = {};
     for (const language of languages) {
       const entry = plan[language], chosen = observed?.id === videoId && observed.requested_subtitles?.[entry.downloadLanguage];
       let identity;
@@ -87,12 +88,12 @@ export async function fetchCaptionTracks(videoId, languages, signal, { exec = ex
       if (!file) continue;
       const path = join(folder, file);
       if ((await stat(path)).size > MAX_SUBTITLE_BYTES) { failure ||= new Error('Captions exceed the 5 MB limit. Loading stopped.'); continue; }
-      try { const cues = parseSubtitles(await readFile(path, 'utf8')); if (cues.length) tracks[language] = cues; }
+      try { const cues = parseSubtitles(await readFile(path, 'utf8')); if (cues.length) { tracks[language] = cues; identities[language] = { downloadLanguage: entry.downloadLanguage, identity }; } }
       catch { failure ||= new Error('The selected captions have no valid timestamps.'); }
     }
     signal?.throwIfAborted();
     if (languages.some(language => !tracks[language])) failure ||= new Error('YouTube did not provide all requested caption tracks.');
-    return { tracks, ...(failure ? { error: failure } : {}) };
+    return { tracks, identities, ...(failure ? { error: failure } : {}) };
   } finally { await rm(folder, { recursive: true, force: true }); }
 }
 export async function fetchCaptions(videoId, language = 'en', signal) {

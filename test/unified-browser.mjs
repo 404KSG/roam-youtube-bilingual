@@ -23,21 +23,20 @@ export async function runUnifiedAcceptance(options = {}) {
   const originalFetch = window.fetch;
   const source = 'This English sentence\nwas previously wrapped onto two lines.';
   const targets = { 'zh-Hans': ['第一行中文', '第二行中文'], ja: ['日本語の字幕を', '一行にまとめます。'], fr: ['Une ligne française', 'sans retour à la ligne.'] };
-  let ccState = 'off', ccReason = 'control', releaseLate, hold = false;
+  let ccState = 'off', ccReason = 'control', releaseLate, hold = false, releaseTarget, holdTarget = true, targetFailure = false;
   sessionStorage.setItem('roam-youtube-bilingual/session/v1', JSON.stringify({ target: 'zh-Hans', fontSize: 20 }));
   window.fetch = async (url, options = {}) => {
     const path = new URL(url).pathname; const body = options.body ? JSON.parse(options.body) : {};
     calls.push({ path, body });
     let data;
-    if (path.endsWith('/health')) data = { ok: true, service: 'roam-youtube-bilingual', apiVersion: 7, provider: 'youtube-unified' };
+    if (path.endsWith('/health')) data = { ok: true, service: 'roam-youtube-bilingual', apiVersion: 8, provider: 'youtube-unified' };
     else if (path.endsWith('/video-info')) data = { videoId: body.videoId, title: 'Fixture video', sourceLanguage: 'en', languages: [{ code: 'en', name: 'English' }, { code: 'zh-Hans', name: 'Chinese' }, { code: 'ja', name: 'Japanese' }, { code: 'fr', name: 'French' }] };
-    else if (path.endsWith('/captions')) {
-      const parts = targets[body.target] || targets['zh-Hans'];
-      data = { videoId: body.videoId, language: body.target, sourceLanguage: 'en', captionPolicy: 'same-source-v1', cues: body.target === 'en'
-        ? [{ start: 0, end: 4, text: source }, { start: 4, end: 8, text: 'Next English segment.' }]
-        : [{ start: 0, end: 2, text: parts[0] }, { start: 2, end: 4, text: parts[1] }, { start: 4, end: 8, text: '下一段译文。' }] };
-    }
-    else if (path.endsWith('/native-cc-state')) {
+    else if (path.endsWith('/caption-session')) {
+      const parts = targets[body.target] || targets['zh-Hans'], sourceFingerprint = 'a'.repeat(64), pairId = 'b'.repeat(64), base = { videoId: body.videoId, target: body.target, captionPolicy: 'same-source-v1' };
+      const events = [{ ...base, sequence: 1, type: 'phase', phase: 'cache-reading' }, { ...base, sequence: 2, type: 'info', cacheDisposition: 'miss', info: { videoId: body.videoId, title: 'Fixture video', sourceLanguage: 'en', languages: [{ code: 'en', name: 'English' }, { code: 'zh-Hans', name: 'Chinese' }, { code: 'ja', name: 'Japanese' }, { code: 'fr', name: 'French' }] } }, { ...base, sequence: 3, type: 'source-ready', language: 'en', sourceFingerprint, cues: [{ start: 0, end: 4, text: source }, { start: 4, end: 8, text: 'Next English segment.' }] }];
+      const targetEvents = targetFailure ? [{ ...base, sequence: 4, type: 'target-error', code: 'YOUTUBE_RATE_LIMITED', message: 'Translated captions are unavailable; English remains available.' }, { ...base, sequence: 5, type: 'complete', outcome: 'source-only' }] : [{ ...base, sequence: 4, type: 'target-ready', language: body.target, targetType: 'auto-translated', sourceFingerprint, pairId, cues: [{ start: 0, end: 2, text: parts[0] }, { start: 2, end: 4, text: parts[1] }, { start: 4, end: 8, text: '下一段译文。' }] }, { ...base, sequence: 5, type: 'complete', outcome: 'bilingual' }];
+      return new Response(new ReadableStream({ start(controller) { const send = event => controller.enqueue(new TextEncoder().encode(JSON.stringify(event) + '\n')); events.forEach(send); const finish = () => { targetEvents.forEach(send); controller.close(); }; if (holdTarget) releaseTarget = finish; else finish(); } }), { headers: { 'Content-Type': 'application/x-ndjson; charset=utf-8' } });
+    } else if (path.endsWith('/native-cc-state')) {
       data = { videoId: body.videoId, state: ccState, reason: ccReason, checkedAt: Date.now() };
       if (hold) return new Promise((resolve) => { releaseLate = () => resolve(new Response(JSON.stringify({ ...data, state: 'off' }))); });
     } else throw new Error('Unexpected endpoint: ' + path);
@@ -73,14 +72,15 @@ export async function runUnifiedAcceptance(options = {}) {
     assert([...setting().querySelector('select').options].map((option) => option.value).includes('ja'), 'language choices come from video metadata');
     setting().querySelector('input[type=checkbox]').checked = true;
     setting().querySelector('input[type=checkbox]').dispatchEvent(new Event('change'));
-    await wait(() => icon.dataset.loading === 'false');
-    clock(1);
     await wait(() => calls.some(call => call.path.endsWith('native-cc-state')));
+    clock(1);
     assert(!setting().querySelector('[role=dialog]').matches(':modal'), 'non-modal settings keep scoped native CC verification active');
     done();
     await wait(() => !root().querySelector('.ryb-caption-box').hidden);
     const box = root().querySelector('.ryb-caption-box'), a = root().querySelector('.ryb-source'), b = root().querySelector('.ryb-target');
-    assert(a.textContent === source.replace(/\n/g, ' ') && b.textContent === '第一行中文第二行中文', 'English is flattened and Chinese fragments form one complete segment');
+    assert(a.textContent === source && b.hidden, 'English appears through the CC-off gate while the target stream is pending');
+    releaseTarget(); holdTarget = false;
+    await wait(() => b.textContent === '第一行中文第二行中文' && !b.hidden);
     clock(3);
     assert(b.textContent === '第一行中文第二行中文', 'Chinese stays stable through its former fragment boundary');
     clock(4.5);
@@ -102,8 +102,8 @@ export async function runUnifiedAcceptance(options = {}) {
     done();
     await wait(() => b.textContent === '日本語の字幕を一行にまとめます。' && !box.hidden);
     assert(Number(a.dataset.fontSize) <= 14 && Number(a.dataset.fontSize) > 0 && Number(b.dataset.fontSize) <= 18 && Number(b.dataset.fontSize) > Number(a.dataset.fontSize), 'English and translation sizes apply independently');
-    assert(calls.filter((call) => call.path.endsWith('/captions')).length === 3, 'target changes reuse English but download a separate target track');
-    assert(calls.filter((call) => call.path.endsWith('/captions')).some((call) => call.body.target === 'ja'), 'Japanese selection requests the actual Japanese track');
+    assert(calls.filter((call) => call.path.endsWith('/caption-session')).length === 2, 'target changes start one cancellable caption session per target');
+    assert(calls.filter((call) => call.path.endsWith('/caption-session')).some((call) => call.body.target === 'ja'), 'Japanese selection requests the actual target session');
     ccState = 'unknown'; ccReason = 'controls-hidden';
     const checksBeforeHide = calls.filter(call => call.path.endsWith('native-cc-state')).length;
     await wait(() => calls.filter(call => call.path.endsWith('native-cc-state')).length >= checksBeforeHide + 3);
@@ -114,6 +114,9 @@ export async function runUnifiedAcceptance(options = {}) {
     ccState = 'on'; await wait(() => box.hidden);
     assert(box.hidden, 'CC on immediately closes the render gate');
     ccState = 'off'; await wait(() => !box.hidden);
+    targetFailure = true; icon.click(); await wait(() => setting()?.querySelector('select').disabled === false); setting().querySelector('[name=target]').value = 'fr'; setting().querySelector('[name=target]').dispatchEvent(new Event('change')); done(); clock(1);
+    await wait(() => !box.hidden && b.hidden); await new Promise(resolve => setTimeout(resolve, 800)); icon.click(); await wait(() => setting()?.querySelector('[role=status]').textContent.includes('English remains available'));
+    assert(setting().querySelector('[role=status]').textContent.includes('English remains available') && !box.hidden, 'target failure retains English and persists after later CC checks'); done();
     hold = true; await wait(() => !!releaseLate);
     icon.click(); setting().querySelector('input[type=checkbox]').checked = false; setting().querySelector('input[type=checkbox]').dispatchEvent(new Event('change')); done();
     releaseLate(); await new Promise((resolve) => setTimeout(resolve, 100));

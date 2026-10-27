@@ -60,6 +60,15 @@ test('bounded local capacity is 503, never a fabricated YouTube 429', async t =>
   pending.resolve(1); await active;
 });
 
+test('fast work starts while a translation lane job is active', async t => {
+  const pool = createRequestPool(); t.after(pool.close);
+  const waiting = deferred(), started = deferred();
+  const translation = pool.request('translation', async () => { started.resolve(); return waiting.promise; }, undefined, { lane: 'translation' });
+  await started.promise;
+  assert.equal(await pool.request('metadata', async () => 'fast', undefined, { lane: 'fast' }), 'fast');
+  waiting.resolve('translated'); assert.equal(await translation, 'translated');
+});
+
 test('a queued track already supplied by a batch is served without another download', async t => {
   const pool = createRequestPool(); t.after(pool.close);
   const pending = deferred(); let extra = 0;

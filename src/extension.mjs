@@ -1,4 +1,4 @@
-import { videoIdFromUrl, normalizeCues, activeCueIndex } from './core.mjs';
+import { videoIdFromUrl, activeCueIndex } from './core.mjs';
 import { YouTubeClock } from './clock.mjs';
 import { VideoSurface } from './surface.mjs';
 import { claimRenderer, releaseRenderer } from './lifecycle.mjs';
@@ -8,6 +8,7 @@ import { alignCaptionTracks } from './alignment.mjs';
 import { readingSegments, visibleSegment } from './reading.mjs';
 import { createSettingsPopover } from './settings.mjs';
 import { VERSION, SERVICE_URL, DEFAULT_CONFIG, validateConfig, verifyHealth } from './protocol.mjs';
+import { CaptionSession, phaseMessage } from './caption-session.mjs';
 
 const STORAGE_KEY = 'roam-youtube-bilingual/session/v1';
 const commandLabel = 'YouTube subtitles: Settings';
@@ -175,15 +176,6 @@ class VideoCaptions {
       if (signal?.aborted || task.abort.signal.aborted) cancel();
     });
   }
-  async loadTrack(language, signal) {
-    if (this.tracks.has(language)) return this.tracks.get(language);
-    const data = await request('/v1/youtube/captions', { videoId: this.videoId, target: language }, signal);
-    signal?.throwIfAborted();
-    if (this.disposed || data.videoId !== this.videoId || data.language !== language || data.captionPolicy !== 'same-source-v1' || data.sourceLanguage !== this.info?.sourceLanguage) throw new Error('The captions do not match the current video, language, or English source track.');
-    const cues = normalizeCues(data.cues);
-    if (!cues.length) throw new Error('The selected captions have no valid timestamps.');
-    this.tracks.set(language, cues); return cues;
-  }
   connect() {
     if (this.clock) return;
     this.clock = new YouTubeClock(this.iframe, (time) => {
@@ -200,35 +192,45 @@ class VideoCaptions {
     this.cancelInfo(); this.closeNativeGate(); this.turnOff(); this.videoId = id; this.info = null; this.tracks.clear(); this.alignment = null;
     const saved = preferences.get(id); this.config = validateConfig(saved); this.wantsEnabled = saved.enabled;
     this.preferenceError = preferences.saveWarning; this.preferenceNotice = preferences.notice;
-    this.restoreAttempted = false; this.lastPlayerState = -1; this.lastError = ''; this.updateIcon();
+    this.restoreAttempted = false; this.lastPlayerState = -1; this.lastError = ''; this.targetError = ''; this.nativeError = ''; this.updateIcon();
   }
   restoreIfNeeded(playbackStarted = false) {
     if (!this.wantsEnabled || this.enabled || this.restoreAttempted || this.disposed || document.hidden || this.surface.host.style.display === 'none') return;
     if (!playbackStarted && [...videos.values()].some(video => video !== this && video.enabled)) return;
     this.restoreAttempted = true; void this.turnOn();
   }
+  handleSessionEvent(event, session) {
+    if (this.disposed || this.session !== session || session.epoch !== this.epoch) return;
+    if (event.type === 'phase') { const message = phaseMessage(event.phase); if (message) this.notice(message); return; }
+    if (event.type === 'info') { this.info = event.info; session.info = event.info; settings?.refresh?.(); return; }
+    if (event.type === 'source-ready') {
+      if (!this.info || event.language !== this.info.sourceLanguage) throw new Error('The English captions do not match the active video.');
+      this.tracks.set(event.language, event.cues); session.sourceFingerprint = event.sourceFingerprint;
+      this.connect(); this.closeNativeGate(); this.notice('Checking that native captions are off…'); void this.checkNativeCc(); return;
+    }
+    if (event.type === 'target-ready') {
+      if (event.sourceFingerprint !== session.sourceFingerprint) throw new Error('The translated captions do not match the active English source.');
+      this.targetError = ''; this.tracks.set(this.config.target, event.cues); this.alignment = null; this.loading = false; this.updateIcon(); this.updatePair(); this.notice('Subtitles ready.'); return;
+    }
+    if (event.type === 'target-error') { this.loading = false; this.targetError = event.message; this.updateIcon(); this.notice(event.message); settings?.refresh?.(); return; }
+    if (event.type === 'fatal-error') throw Object.assign(new Error(event.message), { code: event.code });
+    if (event.type === 'complete') { this.loading = false; this.updateIcon(); if (event.outcome === 'bilingual') { this.lastError = ''; this.notice('Subtitles ready.'); } }
+  }
   async turnOn() {
     if (this.enabled || this.disposed) return;
     this.restoreAttempted = true;
     for (const video of videos.values()) if (video !== this && video.enabled) { video.turnOff(); video.restoreAttempted = false; }
-    this.turnOff(); this.enabled = true; this.loading = true; this.lastError = '';
-    const target = this.config.target;
-    const epoch = this.epoch; const abort = this.startRequest = new AbortController();
-    this.updateIcon(); this.notice('Loading English and translated subtitles…');
+    this.turnOff(); this.enabled = true; this.loading = true; this.lastError = ''; this.targetError = ''; this.nativeError = '';
+    const target = this.config.target, epoch = this.epoch, abort = this.startRequest = new AbortController();
+    this.updateIcon(); this.notice('Reading saved subtitles…');
     try {
       verifyHealth(await request('/v1/youtube/health', undefined, abort.signal));
-      const info = await this.loadInfo(abort.signal);
-      if (!info.sourceLanguage) throw new Error('This video has no available English captions.');
-      if (!info.languages.some((item) => item.code === target)) throw new Error('Choose a translation language available for this video.');
-      if (!this.tracks.has(target) && info.languages.some(item => item.code === target && item.autoTranslated)) this.notice('Preparing YouTube translation. The first download may take about a minute.');
-      // The helper prepares auto-translations after extraction and reuses saved
-      // tracks. Original/uploaded captions do not need the preparation delay.
-      await this.loadTrack(target, abort.signal);
-      await this.loadTrack(info.sourceLanguage, abort.signal);
-      if (this.disposed || epoch !== this.epoch || abort.signal.aborted) return;
-      this.connect(); this.closeNativeGate(); this.notice('Checking that native captions are off…');
+      const url = `${SERVICE_URL}/v1/youtube/caption-session?client_version=${encodeURIComponent(VERSION)}`;
+      const session = this.session = new CaptionSession({ videoId: this.videoId, target, epoch, signal: abort.signal, url, onEvent: (event, ref) => this.handleSessionEvent(event, ref) });
+      await session.start();
+      if (this.session === session) this.session = null;
     } catch (error) {
-      if (error.name !== 'AbortError' && epoch === this.epoch) { this.turnOff(); this.lastError = error.message; this.notice(error.message); }
+      if (error.name !== 'AbortError' && epoch === this.epoch) { this.clearPair(); this.enabled = false; this.loading = false; this.lastError = error.message; this.notice(error.message); this.updateIcon(); }
     } finally { if (this.startRequest === abort) { this.startRequest = null; this.loading = false; this.updateIcon(); } }
   }
   clearPair() { this.pair = null; this.renderCache = null; this.box.hidden = true; this.source.textContent = ''; this.target.textContent = ''; }
@@ -238,7 +240,7 @@ class VideoCaptions {
   }
   turnOff() {
     this.epoch++; this.enabled = false; this.loading = false;
-    this.startRequest?.abort(); this.startRequest = null; this.ccRequest?.abort(); this.ccRequest = null;
+    this.startRequest?.abort(); this.startRequest = null; this.session = null; this.ccRequest?.abort(); this.ccRequest = null;
     this.ccState = 'unknown'; this.ccVerifiedAt = 0; this.clearPair();
     // Never switch native CC merely because a download failed or a dialog closed.
     // Restore only a state this instance positively observed and then changed.
@@ -257,7 +259,7 @@ class VideoCaptions {
     return { x: screenX + rect.x * scale, y: screenY + outerHeight - innerHeight * scale + rect.y * scale, width: rect.width * scale, height: rect.height * scale };
   }
   async checkNativeCc() {
-    if (!this.enabled || this.loading || this.disposed || this.ccRequest || document.hidden || this.surface.host.style.display === 'none' || Date.now() < (this.nextCcCheck || 0)) return;
+    if (!this.enabled || !this.tracks.has(this.info?.sourceLanguage) || this.disposed || this.ccRequest || document.hidden || this.surface.host.style.display === 'none' || Date.now() < (this.nextCcCheck || 0)) return;
     const epoch = this.epoch, videoId = this.videoId, abort = this.ccRequest = new AbortController();
     const before = Date.now(), frame = this.screenFrame();
     try {
@@ -277,15 +279,20 @@ class VideoCaptions {
         return;
       }
       this.nativeWasOn ??= false; this.ccVerifiedAt = data.checkedAt;
-      this.noticeBox.hidden = true; this.lastNoticeKey = null; this.lastError = ''; this.updatePair();
+      this.noticeBox.hidden = true; this.lastNoticeKey = null; this.nativeError = ''; this.updatePair();
     } catch (error) {
-      if (error.name !== 'AbortError' && epoch === this.epoch) { this.ccState = 'unknown'; this.clearPair(); this.lastError = error.message; this.notice(error.message); this.nextCcCheck = Date.now() + 2000; }
+      if (error.name !== 'AbortError' && epoch === this.epoch) { this.ccState = 'unknown'; this.clearPair(); this.nativeError = error.message; this.notice(error.message); this.nextCcCheck = Date.now() + 2000; }
     } finally { if (this.ccRequest === abort) this.ccRequest = null; }
   }
   updatePair() {
-    if (!this.enabled || this.loading || this.ccState !== 'off' || Date.now() - this.ccVerifiedAt > 1500 || this.disposed || !this.clock?.isSynchronized()) { this.clearPair(); return; }
+    if (!this.enabled || this.ccState !== 'off' || Date.now() - this.ccVerifiedAt > 1500 || this.disposed || !this.clock?.isSynchronized()) { this.clearPair(); return; }
     const sourceCues = this.tracks.get(this.info?.sourceLanguage), targetCues = this.tracks.get(this.config.target);
-    if (!sourceCues || !targetCues) { this.clearPair(); return; }
+    if (!sourceCues) { this.clearPair(); return; }
+    if (!targetCues) {
+      const index = activeCueIndex(sourceCues, this.time); const source = index >= 0 ? sourceCues[index].text : '';
+      if (!source) { this.clearPair(); return; }
+      this.pair = { source, target: '' }; this.drawPair(); return;
+    }
     if (this.alignment?.sourceCues !== sourceCues || this.alignment?.targetCues !== targetCues || this.alignment?.language !== this.config.target) {
       const pairs = alignCaptionTracks(sourceCues, targetCues, this.config.target);
       this.alignment = { sourceCues, targetCues, language: this.config.target, pairs, segments: readingSegments(pairs, this.config.target) };

@@ -1,4 +1,4 @@
-export async function runAppearanceAcceptance({ apiVersion = 7 } = {}) {
+export async function runAppearanceAcceptance({ apiVersion = 8 } = {}) {
   if (location.pathname !== '/test-fixture') throw new Error('Owned fixture only.');
   const plugin = window.roamYouTubeBilingual, originalFetch = window.fetch, frame = document.querySelector('iframe');
   const keys = ['roam-youtube-bilingual/global/v1', 'roam-youtube-bilingual/video/v1/M7lc1UVf-VE', 'roam-youtube-bilingual/video/v2/M7lc1UVf-VE'];
@@ -18,7 +18,11 @@ export async function runAppearanceAcceptance({ apiVersion = 7 } = {}) {
     let data;
     if (path.endsWith('/health')) data = { ok: true, service: 'roam-youtube-bilingual', apiVersion, provider: 'youtube-unified' };
     else if (path.endsWith('/video-info')) data = { videoId: body.videoId, sourceLanguage: 'en', title: 'Mock', languages: [{ code: 'zh-Hans' }, { code: 'ja' }] };
-    else if (path.endsWith('/captions')) data = { videoId: body.videoId, language: body.target, sourceLanguage: 'en', captionPolicy: 'same-source-v1', cues: [{ start: 0, end: 10, text: body.target === 'en' ? text : '这是一段较长的字幕，用于验证自然换行、中英独立字号与颜色。文字不应被截断，也不应为了保持单行而一起缩小。' }] };
+    else if (path.endsWith('/caption-session')) {
+      const base = { videoId: body.videoId, target: body.target, captionPolicy: 'same-source-v1' }, sourceFingerprint = 'a'.repeat(64), targetText = body.target === 'en' ? text : '这是一段较长的字幕，用于验证自然换行、中英独立字号与颜色。文字不应被截断，也不应为了保持单行而一起缩小。';
+      const events = [{ ...base, sequence: 1, type: 'info', cacheDisposition: 'miss', info: { videoId: body.videoId, sourceLanguage: 'en', title: 'Mock', languages: [{ code: 'zh-Hans' }, { code: 'ja' }] } }, { ...base, sequence: 2, type: 'source-ready', language: 'en', sourceFingerprint, cues: [{ start: 0, end: 10, text }] }, { ...base, sequence: 3, type: 'target-ready', language: body.target, targetType: 'auto-translated', sourceFingerprint, pairId: 'b'.repeat(64), cues: [{ start: 0, end: 10, text: targetText }] }, { ...base, sequence: 4, type: 'complete', outcome: 'bilingual' }];
+      return new Response(events.map(JSON.stringify).join('\n') + '\n', { headers: { 'Content-Type': 'application/x-ndjson; charset=utf-8' } });
+    }
     else if (path.endsWith('/native-cc-state')) data = { videoId: body.videoId, state: 'off', reason: 'control', checkedAt: Date.now() };
     else throw new Error('Unexpected fixture request');
     return new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } });

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0-beta.15 — Verified bundle sessions
+
+- Upgrade the helper/client contract to API v8. The beta.15 extension and API-v8 helper must be activated together; API-v7 compatibility is intentionally rejected by health checks.
+- Add bounded, cryptographically bound v3 English/target bundles. Fresh bundles provide sanitized metadata, both tracks, and native-CC lookup after helper restart without an upstream metadata or subtitle request. Retained bundles are revalidated before reuse; v2 tracks remain read-only and can be lazily imported.
+- Replace client caption retrieval with one cancellable NDJSON caption session. English reaches the existing single renderer after a fresh CC-off confirmation while translation continues; target errors retain verified English and never switch off global preferences.
+- Reserve separate bounded fast and translation lanes. Cache/metadata/original work can proceed during a translation preparation job; real 429 cooldown, single-flight, and final-subscriber cancellation remain shared.
+- Progress now comes from helper lifecycle phases and uses compact English status strings without an invented one-minute countdown.
+- Automated mocked coverage includes warm helper restart/no-upstream session and native-CC paths, pair-digest tampering, cache freshness/retention guards, source-only target failures, and fast-lane independence. Real YouTube/Roam acceptance remains separate.
+
 ## 0.5.0-beta.14 — 命名字幕轨道兼容
 
 - 修复真实视频 `4AWLcxTGZPA` 的 `en-ehkg1hFWq8A` 英文轨道被误当成语言码，触发 `Invalid caption cache key` 的问题。

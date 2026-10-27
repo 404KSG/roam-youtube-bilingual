@@ -25,9 +25,13 @@ export async function runPreferenceAcceptance() {
   window.fetch = async (url, options = {}) => {
     const path = new URL(url).pathname, body = options.body ? JSON.parse(options.body) : {}; calls.push({ path, body });
     let data;
-    if (path.endsWith('/health')) data = { ok: true, service: 'roam-youtube-bilingual', apiVersion: 7, provider: 'youtube-unified' };
+    if (path.endsWith('/health')) data = { ok: true, service: 'roam-youtube-bilingual', apiVersion: 8, provider: 'youtube-unified' };
     else if (path.endsWith('/video-info')) data = { videoId: body.videoId, title: 'Mock video', sourceLanguage: 'en', languages: [{ code: 'zh-Hans' }, { code: 'ja' }] };
-    else if (path.endsWith('/captions')) data = { videoId: body.videoId, language: body.target, sourceLanguage: 'en', captionPolicy: 'same-source-v1', cues: [{ start: 0, end: 10, text: `${body.target === 'en' ? 'English' : body.target === 'ja' ? '日本語' : '中文'} for ${body.videoId}` }] };
+    else if (path.endsWith('/caption-session')) {
+      const base = { videoId: body.videoId, target: body.target, captionPolicy: 'same-source-v1' }, sourceFingerprint = 'a'.repeat(64), source = `English for ${body.videoId}`, target = `${body.target === 'ja' ? '日本語' : '中文'} for ${body.videoId}`;
+      const events = [{ ...base, sequence: 1, type: 'info', cacheDisposition: 'miss', info: { videoId: body.videoId, title: 'Mock video', sourceLanguage: 'en', languages: [{ code: 'zh-Hans' }, { code: 'ja' }] } }, { ...base, sequence: 2, type: 'source-ready', language: 'en', sourceFingerprint, cues: [{ start: 0, end: 10, text: source }] }, { ...base, sequence: 3, type: 'target-ready', language: body.target, targetType: 'auto-translated', sourceFingerprint, pairId: 'b'.repeat(64), cues: [{ start: 0, end: 10, text: target }] }, { ...base, sequence: 4, type: 'complete', outcome: 'bilingual' }];
+      return new Response(events.map(JSON.stringify).join('\n') + '\n', { headers: { 'Content-Type': 'application/x-ndjson; charset=utf-8' } });
+    }
     else if (path.endsWith('/native-cc-state')) data = { videoId: body.videoId, state: 'off', reason: 'control', checkedAt: Date.now() };
     else throw new Error('Unexpected fixture endpoint');
     return new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } });
@@ -40,7 +44,7 @@ export async function runPreferenceAcceptance() {
     await wait(() => icon().dataset.loading === 'false'); close(); clock();
     await switchVideo(ids[1]);
     check(icon().dataset.active === 'true', 'a different video inherits the global ON choice without another toggle');
-    await wait(() => calls.some(call => call.path.endsWith('/captions') && call.body.videoId === ids[1] && call.body.target === 'ja') && icon().dataset.loading === 'false');
+    await wait(() => calls.some(call => call.path.endsWith('/caption-session') && call.body.videoId === ids[1] && call.body.target === 'ja') && icon().dataset.loading === 'false');
     clock(); await wait(() => sourceText().includes(ids[1]));
     check(!sourceText().includes(ids[0]), 'a new video obtains its own captions rather than retaining the previous text');
     await open();
@@ -49,9 +53,9 @@ export async function runPreferenceAcceptance() {
     await switchVideo(ids[0]); await open();
     check(dialog().querySelector('[name=sourceFontSize]').value === '22' && dialog().querySelector('[name=targetColor]').value === '#ffffff', 'returning to an older video uses the latest global choices');
     close();
-    const beforePlaylistSwitch = calls.filter(call => call.path.endsWith('/video-info') && call.body.videoId === ids[1]).length;
+    const beforePlaylistSwitch = calls.filter(call => call.path.endsWith('/caption-session') && call.body.videoId === ids[1] && call.body.target === 'ja').length;
     window.dispatchEvent(new MessageEvent('message', { source: frame.contentWindow, origin: 'https://www.youtube.com', data: { event: 'infoDelivery', info: { videoData: { video_id: ids[1] }, currentTime: 1, playerState: 2 } } }));
-    await wait(() => calls.filter(call => call.path.endsWith('/video-info') && call.body.videoId === ids[1]).length > beforePlaylistSwitch && icon().dataset.loading === 'false');
+    await wait(() => calls.filter(call => call.path.endsWith('/caption-session') && call.body.videoId === ids[1] && call.body.target === 'ja').length > beforePlaylistSwitch && icon().dataset.loading === 'false');
     check(icon().dataset.active === 'true', 'changing video inside the same YouTube player retains global enablement');
     await open();
     const off = dialog().querySelector('input[type=checkbox]'); off.checked = false; off.dispatchEvent(new Event('change')); close();

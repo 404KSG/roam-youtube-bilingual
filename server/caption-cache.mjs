@@ -12,17 +12,20 @@ export function createCaptionCache(directory, { now = Date.now, maxAgeMs = 86400
     return join(directory, `${videoId}.${language}.json`);
   };
   return {
-    async get(videoId, language, signal, sourceKey = '') {
+    async readRecord(videoId, language, signal, sourceKey = '') {
       const path = pathFor(videoId, language);
       try {
         signal?.throwIfAborted();
         const stat = await lstat(path);
-        if (!stat.isFile() || stat.size > MAX_SUBTITLE_BYTES) return undefined;
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_SUBTITLE_BYTES) return undefined;
         const data = JSON.parse(await readFile(path, { encoding: 'utf8', signal }));
         if (data.schema !== 2 || data.source !== 'youtube-same-source' || data.sourceKey !== sourceKey || data.videoId !== videoId || data.language !== language || !Number.isFinite(data.savedAt) || data.savedAt > now() + 60000 || now() - data.savedAt > maxAgeMs) return undefined;
         const cues = normalizeCues(data.cues);
-        return cues.length ? cues : undefined;
+        return cues.length ? { cues, savedAt: data.savedAt } : undefined;
       } catch (error) { if (signal?.aborted) throw error; return undefined; }
+    },
+    async get(videoId, language, signal, sourceKey = '') {
+      return (await this.readRecord(videoId, language, signal, sourceKey))?.cues;
     },
     async put(videoId, language, input, signal, sourceKey = '') {
       const path = pathFor(videoId, language), temp = `${path}.${randomUUID()}.tmp`;

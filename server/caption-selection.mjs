@@ -53,6 +53,11 @@ export function captionSelection(meta, language, sourceLanguage) {
   const track = selectOne(meta, language, sourceLanguage);
   return { downloadLanguage: track.downloadLanguage, identity: captionIdentity(track, meta.id) };
 }
+export function captionTrackType(meta, language, sourceLanguage = englishCaptionLanguage(meta)) {
+  if (language === sourceLanguage) return 'source';
+  const track = selectOne(meta, language, sourceLanguage);
+  return new URL(track.url).searchParams.has('tlang') ? 'auto-translated' : 'uploaded';
+}
 export function captionLanguages(meta, sourceLanguage) {
   const manualSource = jsonTrack(meta.subtitles?.[sourceLanguage]);
   const suffix = '-' + sourceLanguage;

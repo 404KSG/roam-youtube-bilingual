@@ -2,13 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeServer } from '../server/index.mjs';
 import { createCaptionCache } from '../server/caption-cache.mjs';
+import { createCaptionBundleCache, makeCaptionBundle } from '../server/caption-bundle-cache.mjs';
 import { sanitizeVideoInfo } from '../server/video-info.mjs';
 import { namedTrackMetadata, namedEnglishKey } from './caption-fixtures.mjs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 const id = 'vif8NQcjVf0';
-const info = { videoId: id, title: 'Test video', sourceLanguage: 'en', playerSourceLanguage: 'en', sourceTrack: { languageCode: 'en', kind: '', name: '' }, languages: [{ code: 'zh-Hans', name: 'Chinese' }, { code: 'ja', name: 'Japanese' }] };
+const selection = language => ({ downloadLanguage: language, identity: { lang: 'en', kind: '', name: '', tlang: language === 'en' ? '' : language } });
+const info = { videoId: id, title: 'Test video', sourceLanguage: 'en', playerSourceLanguage: 'en', sourceTrack: { languageCode: 'en', languageName: 'English', kind: '', name: '', vss_id: '.en' }, sourceSelection: selection('en'), languages: [{ code: 'zh-Hans', name: 'Chinese', autoTranslated: true, selection: selection('zh-Hans') }, { code: 'ja', name: 'Japanese', autoTranslated: true, selection: selection('ja') }] };
 async function fixture(t, options = {}) {
   const server = makeServer({ infoFetcher: async () => info, captionFetcher: async () => [{ id: 0, start: 0, end: 2, text: 'English' }], verifyPeer: async () => {}, nativeCcReader: { read: async () => ({ state: 'off' }) }, ...options });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -19,107 +23,77 @@ const post = (body, origin = 'https://roamresearch.com') => ({ method: 'POST', h
 const frame = { x: 100, y: 100, width: 800, height: 450 };
 test('health describes compact bridge without models, tokens or API configuration', async (t) => {
   const base = await fixture(t); const data = await (await fetch(base + '/v1/youtube/health')).json();
-  assert.equal(data.provider, 'youtube-unified'); assert.equal(data.apiVersion, 7);
+  assert.equal(data.provider, 'youtube-unified'); assert.equal(data.apiVersion, 8);
   assert.equal('apiConfigured' in data, false); assert.equal('token' in data, false);
 });
-test('captions require a video-supported target and cache actual tracks by video and language', async (t) => {
-  let infos = 0, captions = 0;
-  const requested = [];
-  const base = await fixture(t, { infoFetcher: async () => { infos++; return info; }, captionFetcher: async (_id, language) => { captions++; requested.push(language); return [{ id: 0, start: 0, end: 1, text: language }]; } });
-  const metadata = await (await fetch(base + '/v1/youtube/video-info', post({ videoId: id }))).json();
-  assert.equal(metadata.languages[1].code, 'ja');
-  const english = await (await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'en' }))).json();
-  const chinese = await (await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'zh-Hans' }))).json();
-  await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'en' }));
-  assert.deepEqual([english.language, chinese.language], ['en', 'zh-Hans']);
-  assert.deepEqual(requested, ['en', 'zh-Hans']);
-  assert.equal(infos, 1); assert.equal(captions, 2);
-  assert.equal((await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'de' }))).status, 400);
+test('API 8 removes the legacy captions orchestration route', async t => {
+  const base = await fixture(t);
+  assert.equal((await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'zh-Hans' }))).status, 404);
 });
-test('HTTP captions support the reported named source key while rejecting unrelated track IDs', async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'ryb-named-api-')); t.after(() => rm(directory, { recursive: true, force: true }));
-  const namedInfo = sanitizeVideoInfo(namedTrackMetadata(), id), calls = [];
-  const base = await fixture(t, { infoFetcher: async () => namedInfo, captionCache: createCaptionCache(directory), captionFetcher: async (_id, key) => {
-    calls.push(key); return [{ start: 0, end: 2, text: key === namedEnglishKey ? 'Named English' : 'Translated Chinese' }];
+test('cold caption-session invokes the downloader adapter with video ID and complete verified selection options', async t => {
+  const calls = [];
+  const base = await fixture(t, { captionFetcher: undefined, captionBatchFetcher: async (videoId, languages, _signal, options) => {
+    calls.push({ videoId, languages, options });
+    return { tracks: Object.fromEntries(languages.map(language => [language, [{ start: 0, end: 2, text: language }]])), identities: Object.fromEntries(languages.map(language => [language, options.selections[language]])) };
   } });
-  const target = await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'zh-Hans' }));
-  assert.equal(target.status, 200); assert.equal((await target.json()).sourceLanguage, namedEnglishKey);
-  const source = await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: namedEnglishKey }));
-  assert.equal(source.status, 200); assert.equal((await source.json()).cues[0].text, 'Named English');
-  const before = calls.length;
-  assert.equal((await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'en-unrelatedTrackID' }))).status, 400);
-  assert.equal((await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'en-../private' }))).status, 400);
-  assert.equal(calls.length, before);
+  const response = await fetch(base + '/v1/youtube/caption-session', post({ videoId: id, target: 'zh-Hans' }));
+  const events = (await response.text()).trim().split('\n').map(JSON.parse);
+  assert.equal(response.status, 200); assert.equal(events.at(-1).outcome, 'bilingual');
+  assert.deepEqual(calls.map(call => call.videoId), [id, id]);
+  for (const call of calls) { assert.equal(call.options.sourceLanguage, 'en'); assert.deepEqual(call.options.expectedSourceTrack, info.sourceTrack); assert.deepEqual(Object.keys(call.options.selections), call.languages); }
+  assert.deepEqual(calls.map(call => call.options.waitSeconds), [60, 0]);
 });
-test('target-first loading batches both tracks and the source request hits cache', async (t) => {
-  const batches = [];
-  const base = await fixture(t, { captionFetcher: undefined, captionBatchFetcher: async (_id, languages) => {
-    batches.push(languages);
-    return { tracks: Object.fromEntries(languages.map(language => [language, [{ id: 0, start: 0, end: 2, text: language }]])) };
-  } });
-  const target = await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'zh-Hans' }));
-  const source = await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'en' }));
-  assert.equal(target.status, 200); assert.equal(source.status, 200);
-  assert.deepEqual(batches, [['en', 'zh-Hans']]);
+test('due HTTP caption-session revalidates source through the real adapter and reuses only matching auto target', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'ryb-http-due-')); t.after(() => rm(directory, { recursive: true, force: true })); let now = 0;
+  const cache = createCaptionBundleCache(directory, { now: () => now, freshnessMs: 1 }); const saved = makeCaptionBundle({ videoId: id, target: 'zh-Hans', info, source: { trackKey: 'en', playerTrack: JSON.stringify(info.sourceTrack), selection: info.sourceSelection, cues: [{ start: 0, end: 1, text: 'English' }] }, targetTrack: { type: 'auto-translated', selection: info.languages[0].selection, cues: [{ start: 0, end: 1, text: '中文' }] }, now: () => now }); await cache.write(saved); now = 2;
+  const calls = []; const base = await fixture(t, { now: () => now, captionBundleCache: cache, captionFetcher: undefined, captionBatchFetcher: async (video, languages, _signal, options) => { calls.push({ video, languages, options }); return { tracks: { en: [{ start: 0, end: 1, text: 'English' }] }, identities: { en: options.selections.en } }; } });
+  const events = (await (await fetch(base + '/v1/youtube/caption-session', post({ videoId: id, target: 'zh-Hans' }))).text()).trim().split('\n').map(JSON.parse);
+  assert.equal(events.find(event => event.type === 'info').cacheDisposition, 'revalidated'); assert.deepEqual(calls.map(call => call.video), [id]); assert.equal(events.find(event => event.type === 'target-ready').cues[0].text, '中文');
 });
-test('original captions stay fast and auto-translations use the proven preparation delay', async (t) => {
-  const batches = [];
-  const base = await fixture(t, { captionFetcher: undefined, infoFetcher: async () => ({ ...info, languages: [{ code: 'zh-Hans', autoTranslated: true }] }), captionBatchFetcher: async (_id, languages, _signal, options) => {
-    assert.equal(options.sourceLanguage, 'en'); assert.deepEqual(options.expectedSourceTrack, info.sourceTrack);
-    batches.push({ languages, waitSeconds: options.waitSeconds });
-    return { tracks: Object.fromEntries(languages.map(language => [language, [{ id: 0, start: 0, end: 2, text: language }]])) };
-  } });
-  assert.equal((await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'zh-Hans' }))).status, 200);
-  assert.deepEqual(batches, [{ languages: ['en'], waitSeconds: 0 }, { languages: ['zh-Hans'], waitSeconds: 60 }]);
+test('warm caption sessions and native CC state use a fresh v3 bundle before upstream metadata', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'ryb-warm-v3-')); t.after(() => rm(directory, { recursive: true, force: true }));
+  const selection = language => ({ downloadLanguage: language, identity: { lang: 'en', kind: '', name: '', tlang: language === 'en' ? '' : language } });
+  const warmInfo = { videoId: id, title: 'Warm', sourceLanguage: 'en', playerSourceLanguage: 'en', sourceTrack: { languageCode: 'en', languageName: 'English', kind: '', name: '', vss_id: '.en' }, sourceSelection: selection('en'), languages: [{ code: 'zh-Hans', name: 'Chinese', autoTranslated: true, selection: selection('zh-Hans') }] };
+  const bundles = createCaptionBundleCache(directory), bundle = makeCaptionBundle({ videoId: id, target: 'zh-Hans', info: warmInfo, source: { trackKey: 'en', playerTrack: JSON.stringify(warmInfo.sourceTrack), selection: selection('en'), cues: [{ start: 0, end: 1, text: 'English' }] }, targetTrack: { type: 'auto-translated', selection: selection('zh-Hans'), cues: [{ start: 0, end: 1, text: '中文' }] } });
+  await bundles.write(bundle); let upstream = 0;
+  const base = await fixture(t, { captionBundleCache: createCaptionBundleCache(directory), infoFetcher: async () => { upstream++; throw new Error('unexpected metadata'); }, captionFetcher: async () => { upstream++; throw new Error('unexpected captions'); } });
+  const response = await fetch(base + '/v1/youtube/caption-session', post({ videoId: id, target: 'zh-Hans' }));
+  const events = (await response.text()).trim().split('\n').map(JSON.parse);
+  assert.equal(response.headers.get('content-type').startsWith('application/x-ndjson'), true); assert.equal(events.find(event => event.type === 'info').info.title, 'Warm'); assert.equal(events.find(event => event.type === 'target-ready').cues[0].text, '中文');
+  const warmInfoResponse = await fetch(base + '/v1/youtube/video-info', post({ videoId: id })); assert.equal(warmInfoResponse.status, 200); assert.equal((await warmInfoResponse.json()).title, 'Warm');
+  assert.equal((await fetch(base + '/v1/youtube/native-cc-state', post({ videoId: id, frame }))).status, 200); assert.equal(upstream, 0);
 });
-test('saved tracks load without another subtitle download', async (t) => {
-  let downloads = 0;
-  const base = await fixture(t, { captionFetcher: undefined, captionBatchFetcher: async () => { downloads++; throw new Error('unexpected download'); }, captionCache: {
-    get: async (_id, language) => [{ id: 0, start: 0, end: 2, text: language }],
-  } });
-  const response = await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'zh-Hans' }));
-  assert.equal(response.status, 200); assert.equal(downloads, 0);
+test('a same-process due session forces current metadata, source, and same-type uploaded target acquisition', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'ryb-same-process-due-')); t.after(() => rm(directory, { recursive: true, force: true })); let now = 0, pass = 0, metadataCalls = 0; const cache = createCaptionBundleCache(directory, { now: () => now, freshnessMs: 1 });
+  const uploaded = { ...info, languages: [{ ...info.languages[0], autoTranslated: false }] }; const calls = [];
+  const base = await fixture(t, { now: () => now, captionBundleCache: cache, infoFetcher: async () => { metadataCalls++; return pass === 3 ? { ...uploaded, sourceTrack: { ...uploaded.sourceTrack, vss_id: '.new-source' } } : uploaded; }, captionFetcher: async (_id, language) => { calls.push({ pass, language }); return [{ start: 0, end: 1, text: `${pass}-${language}` }]; } });
+  const session = async () => (await (await fetch(base + '/v1/youtube/caption-session', post({ videoId: id, target: 'zh-Hans' }))).text()).trim().split('\n').map(JSON.parse);
+  pass = 1; await session(); now = 2; pass = 2; const changedContent = await session(); now = 4; pass = 3; const changedSourceKey = await session();
+  assert.equal(metadataCalls, 3); assert.deepEqual(calls, [{ pass: 1, language: 'zh-Hans' }, { pass: 1, language: 'en' }, { pass: 2, language: 'en' }, { pass: 2, language: 'zh-Hans' }, { pass: 3, language: 'en' }, { pass: 3, language: 'zh-Hans' }]);
+  assert.equal(changedContent.find(event => event.type === 'target-ready').cues[0].text, '2-zh-Hans'); assert.equal(changedSourceKey.find(event => event.type === 'target-ready').cues[0].text, '3-zh-Hans');
 });
-test('a partial successful source is cached even when the target batch hits 429', async (t) => {
-  let calls = 0;
-  const base = await fixture(t, { captionFetcher: undefined, captionBatchFetcher: async () => {
-    calls++;
-    return { tracks: { en: [{ id: 0, start: 0, end: 2, text: 'English' }] }, error: Object.assign(new Error('limited'), { code: 'YOUTUBE_RATE_LIMITED', status: 429 }) };
-  } });
-  assert.equal((await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'zh-Hans' }))).status, 429);
-  assert.equal((await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'en' }))).status, 200);
-  assert.equal(calls, 1);
+test('HTTP disconnect and response-limit abort cancel active caption session work', async t => {
+  let disconnected = false; const base = await fixture(t, { captionFetcher: async (_id, _language, signal) => new Promise((_resolve, reject) => signal.addEventListener('abort', () => { disconnected = true; reject(new DOMException('Aborted', 'AbortError')); }, { once: true })) });
+  const controller = new AbortController(); const response = await fetch(base + '/v1/youtube/caption-session', { ...post({ videoId: id, target: 'zh-Hans' }), signal: controller.signal }); controller.abort(); await delay(20); assert.equal(response.status, 200); assert.equal(disconnected, true);
+  let limited = false; const limitedBase = await fixture(t, { maxSessionBytes: 1000, captionFetcher: async (_id, language, signal) => language === 'en' ? [{ start: 0, end: 1, text: 'English' }] : new Promise((_resolve, reject) => signal.addEventListener('abort', () => { limited = true; reject(new DOMException('Aborted', 'AbortError')); }, { once: true })) });
+  await fetch(limitedBase + '/v1/youtube/caption-session', post({ videoId: id, target: 'zh-Hans' })); await delay(20); assert.equal(limited, true);
 });
-test('cached captions remain available while another language is downloading', async (t) => {
-  let release, started;
-  const waiting = new Promise(resolve => { release = resolve; });
-  const active = new Promise(resolve => { started = resolve; });
-  const base = await fixture(t, { captionFetcher: async (_id, language) => {
-    if (language === 'zh-Hans') { started(); await waiting; }
-    return [{ id: 0, start: 0, end: 1, text: language }];
-  } });
-  await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'en' }));
-  const pending = fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'zh-Hans' }));
-  await active;
-  try {
-    const cached = await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'en' }));
-    assert.equal(cached.status, 200, 'a local busy state must not masquerade as YouTube 429');
-  } finally { release(); await pending; }
+test('valid legacy v2 source and target records import without target redownload', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'ryb-legacy-import-')); t.after(() => rm(directory, { recursive: true, force: true }));
+  const legacy = createCaptionCache(join(directory, 'v2')), bundles = createCaptionBundleCache(join(directory, 'v3'));
+  const keyFor = language => createHash('sha256').update(JSON.stringify([info.sourceLanguage, info.playerSourceLanguage, info.sourceTrack.kind, info.sourceTrack.name, info.sourceTrack.vss_id, language === info.sourceLanguage ? info.sourceSelection : info.languages.find(item => item.code === language).selection])).digest('hex');
+  await legacy.put(id, 'en', [{ start: 0, end: 1, text: 'English' }], undefined, keyFor('en'));
+  await legacy.put(id, 'zh-Hans', [{ start: 0, end: 1, text: '中文' }], undefined, keyFor('zh-Hans'));
+  let downloads = 0; const base = await fixture(t, { captionCache: legacy, captionBundleCache: bundles, captionFetcher: async () => { downloads++; throw new Error('must not download'); } });
+  const events = (await (await fetch(base + '/v1/youtube/caption-session', post({ videoId: id, target: 'zh-Hans' }))).text()).trim().split('\n').map(JSON.parse);
+  assert.equal(events.find(event => event.type === 'info').cacheDisposition, 'legacy-import'); assert.equal(events.find(event => event.type === 'target-ready').cues[0].text, '中文'); assert.equal(downloads, 0);
 });
-test('real upstream 429 has a typed cooldown without automatic retries', async (t) => {
-  let calls = 0, now = 0;
-  const base = await fixture(t, { now: () => now, cooldownMs: 1000, captionFetcher: async () => {
-    calls++; throw Object.assign(new Error('YouTube 限流'), { status: 429, code: 'YOUTUBE_RATE_LIMITED' });
-  } });
-  const first = await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'en' }));
-  assert.equal(first.status, 429);
-  const second = await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'en' }));
-  assert.equal(second.status, 429); assert.equal(calls, 1);
-  assert.equal((await second.json()).code, 'YOUTUBE_RATE_LIMITED');
-  assert.equal(second.headers.get('retry-after'), '1');
-  now = 1001;
-  await fetch(base + '/v1/youtube/captions', post({ videoId: id, target: 'en' }));
-  assert.equal(calls, 2);
+test('partial legacy v2 records are not imported as a pair', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'ryb-legacy-partial-')); t.after(() => rm(directory, { recursive: true, force: true })); const legacy = createCaptionCache(join(directory, 'v2'));
+  const sourceKey = createHash('sha256').update(JSON.stringify([info.sourceLanguage, info.playerSourceLanguage, info.sourceTrack.kind, info.sourceTrack.name, info.sourceTrack.vss_id, info.sourceSelection])).digest('hex'); await legacy.put(id, 'en', [{ start: 0, end: 1, text: 'old English' }], undefined, sourceKey);
+  let downloads = 0; const base = await fixture(t, { captionCache: legacy, captionBundleCache: createCaptionBundleCache(join(directory, 'v3')), captionFetcher: async (_id, language) => { downloads++; return [{ start: 0, end: 1, text: language }]; } });
+  const events = (await (await fetch(base + '/v1/youtube/caption-session', post({ videoId: id, target: 'zh-Hans' }))).text()).trim().split('\n').map(JSON.parse);
+  assert.equal(events.find(event => event.type === 'info').cacheDisposition, 'miss'); assert.equal(downloads, 2);
 });
 test('native CC state requires same-user verification and only reports an explicit off state', async (t) => {
   let verified = false, read = false;
@@ -139,7 +113,7 @@ test('removed AI routes, credentials and arbitrary files are not exposed', async
   const base = await fixture(t);
   assert.equal((await fetch(base + '/v1/translate', post({ entries: [] }))).status, 404);
   for (const path of ['/.env', '/server/caption-reader.mjs', '/../README.md']) assert.equal((await fetch(base + path)).status, 404);
-  assert.equal((await fetch(base + '/v1/youtube/captions', post({ videoId: 'file:///private' }))).status, 400);
+  assert.equal((await fetch(base + '/v1/youtube/captions', post({ videoId: 'file:///private' }))).status, 404);
 });
 test('size, content type and private-network preflight guards remain active', async (t) => {
   const base = await fixture(t);

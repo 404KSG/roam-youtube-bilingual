@@ -13,9 +13,13 @@ export async function runGlobalMigrationAcceptance() {
   Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
   window.fetch = async (url, options = {}) => {
     const path = new URL(url).pathname, body = JSON.parse(options.body || '{}');
-    const data = path.endsWith('/health') ? { ok: true, service: 'roam-youtube-bilingual', apiVersion: 7, provider: 'youtube-unified' }
+    if (path.endsWith('/caption-session')) {
+      const base = { videoId: body.videoId, target: body.target, captionPolicy: 'same-source-v1' }, sourceFingerprint = 'a'.repeat(64);
+      const events = body.videoId === unsupported ? [{ ...base, sequence: 1, type: 'fatal-error', code: 'SOURCE_TRACK_UNAVAILABLE', message: 'This video has no available English captions.' }] : [{ ...base, sequence: 1, type: 'info', cacheDisposition: 'miss', info: { videoId: body.videoId, title: 'Fixture', sourceLanguage: 'en', languages: [{ code: 'ja' }, { code: 'zh-Hans' }] } }, { ...base, sequence: 2, type: 'source-ready', language: 'en', sourceFingerprint, cues: [{ start: 0, end: 10, text: 'Fixture English' }] }, { ...base, sequence: 3, type: 'target-ready', language: body.target, targetType: 'auto-translated', sourceFingerprint, pairId: 'b'.repeat(64), cues: [{ start: 0, end: 10, text: 'Fixture ' + body.target }] }, { ...base, sequence: 4, type: 'complete', outcome: 'bilingual' }];
+      return new Response(events.map(JSON.stringify).join('\n') + '\n', { headers: { 'Content-Type': 'application/x-ndjson; charset=utf-8' } });
+    }
+    const data = path.endsWith('/health') ? { ok: true, service: 'roam-youtube-bilingual', apiVersion: 8, provider: 'youtube-unified' }
       : path.endsWith('/video-info') ? { videoId: body.videoId, title: 'Fixture', sourceLanguage: body.videoId === unsupported ? null : 'en', languages: body.videoId === unsupported ? [] : [{ code: 'ja' }, { code: 'zh-Hans' }] }
-      : path.endsWith('/captions') ? { videoId: body.videoId, sourceLanguage: 'en', captionPolicy: 'same-source-v1', language: body.target, cues: [{ start: 0, end: 10, text: 'Fixture ' + body.target }] }
       : { videoId: body.videoId, state: 'off', reason: 'control', checkedAt: Date.now() };
     return new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } });
   };
