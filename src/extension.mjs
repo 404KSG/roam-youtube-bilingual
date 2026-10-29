@@ -1,6 +1,6 @@
 import { videoIdFromUrl, activeCueIndex } from './core.mjs';
 import { YouTubeClock } from './clock.mjs';
-import { VideoSurface } from './surface.mjs';
+import { VideoSurface, subtitleMetrics } from './surface.mjs';
 import { claimRenderer, releaseRenderer } from './lifecycle.mjs';
 import { resolveNativeCc } from './native-cc.mjs';
 import { createSubtitlePreferences, GLOBAL_PREFERENCES_KEY } from './preferences.mjs';
@@ -93,7 +93,8 @@ class VideoCaptions {
     const saved = preferences.get(this.videoId); this.config = validateConfig(saved); this.wantsEnabled = saved.enabled; this.restoreAttempted = false;
     this.preferenceError = preferences.saveWarning; this.preferenceNotice = preferences.notice;
     this.captionData = null; this.time = 0; this.epoch = 0; this.enabled = false; this.loading = false; this.ccState = 'unknown'; this.ccVerifiedAt = 0; this.nativeWasOn = null; this.nativeChanged = false;
-    this.surface = new VideoSurface(iframe, STYLE); this.surface.host.dataset.version = VERSION;
+    this.nativeControlsHidden = false;
+    this.surface = new VideoSurface(iframe, STYLE, { onLayoutChange: () => this.drawPair() }); this.surface.host.dataset.version = VERSION;
     this.box = el('div', 'ryb-caption-box'); this.box.hidden = true; this.box.setAttribute('aria-label', 'Bilingual subtitles');
     this.source = el('div', 'ryb-line ryb-source'); this.source.dir = 'ltr';
     this.target = el('div', 'ryb-line ryb-target'); this.target.dir = 'auto';
@@ -270,13 +271,13 @@ class VideoCaptions {
   }
   clearPair() { this.pair = null; this.renderCache = null; this.box.hidden = true; this.source.textContent = ''; this.target.textContent = ''; }
   closeNativeGate() {
-    this.ccState = 'unknown'; this.ccVerifiedAt = 0; this.ccRequest?.abort(); this.ccRequest = null; this.clearPair();
+    this.ccState = 'unknown'; this.ccVerifiedAt = 0; this.nativeControlsHidden = false; this.ccRequest?.abort(); this.ccRequest = null; this.clearPair();
     this.nextCcCheck = 0;
   }
   turnOff() {
     this.epoch++; this.enabled = false; this.loading = false;
     this.startRequest?.abort(); this.startRequest = null; this.session = null; this.captionData = null; this.alignment = null; this.ccRequest?.abort(); this.ccRequest = null;
-    this.ccState = 'unknown'; this.ccVerifiedAt = 0; this.clearPair();
+    this.ccState = 'unknown'; this.ccVerifiedAt = 0; this.nativeControlsHidden = false; this.clearPair();
     // Never switch native CC merely because a download failed or a dialog closed.
     // Restore only a state this instance positively observed and then changed.
     if (this.nativeChanged && this.nativeWasOn === true) this.clock?.restoreCaptions();
@@ -304,6 +305,7 @@ class VideoCaptions {
       if (['x', 'y', 'width', 'height'].some(key => Math.abs(frame[key] - currentFrame[key]) > 4)) { this.nextCcCheck = 0; return; }
       if (!Number.isFinite(data.checkedAt) || data.checkedAt < before - 100 || data.checkedAt > Date.now() + 100 || Date.now() - data.checkedAt > 1500) { this.closeNativeGate(); return; }
       this.ccState = resolveNativeCc(this.ccState, data);
+      this.nativeControlsHidden = this.ccState === 'off' && data.reason === 'controls-hidden';
       this.nextCcCheck = Date.now() + 700;
       if (this.ccState !== 'off') {
         this.clearPair();
@@ -345,16 +347,16 @@ class VideoCaptions {
     return this.measure.measureText(text).width;
   }
   fitsReadingSegment(segment) {
-    const width = Math.min(this.iframe.getBoundingClientRect().width - 40, 1060), config = this.config;
+    const width = Math.min((this.surface?.viewport?.width || this.iframe.getBoundingClientRect().width) - 40, 1060), config = this.config;
     const cache = this.fitCache;
     if (cache?.segment === segment && cache.width === width && cache.config === config) return cache.fits;
     const fits = this.textWidth(segment.source, config.sourceFontSize) <= width * 1.6 && this.textWidth(segment.target, config.targetFontSize) <= width * 1.6;
     this.fitCache = { segment, width, config, fits }; return fits;
   }
-  fitRow(row, requested) {
+  fitRow(row, requested, scaleY = 1) {
     if (row.hidden) return;
     row.style.fontSize = `${requested}px`;
-    const fits = size => row.getBoundingClientRect().height <= size * 2.6 + .5 && row.scrollWidth <= row.clientWidth + 1;
+    const fits = size => row.getBoundingClientRect().height / scaleY <= size * 2.6 + .5 && row.scrollWidth <= row.clientWidth + 1;
     if (!fits(requested)) {
       let low = .5, high = requested;
       for (let i = 0; i < 10; i++) { const middle = (low + high) / 2; row.style.fontSize = `${middle}px`; if (fits(middle)) low = middle; else high = middle; }
@@ -365,27 +367,32 @@ class VideoCaptions {
   drawPair() {
     if (!this.enabled || this.ccState !== 'off' || Date.now() - this.ccVerifiedAt > 1500 || !this.pair || this.disposed) { this.box.hidden = true; return; }
     const rect = this.iframe.getBoundingClientRect(), pair = this.pair, config = this.config;
-    if (rect.width < 160 || rect.height < 90 || !pair.source) { this.box.hidden = true; return; }
+    if (rect.width < 160 || rect.height < 90 || !pair.source || this.surface.host.style.display === 'none') { this.box.hidden = true; this.renderCache = null; return; }
+    const viewport = this.surface.viewport || { width: rect.width, height: rect.height, scaleY: 1 };
+    const controlsHidden = this.nativeControlsHidden && this.clock?.state === 1 && !this.surface.isInteracting();
+    const metrics = subtitleMetrics(viewport.width, viewport.height, 1, .08, { controlsHidden });
+    if (metrics.maxCaptionHeight < 24) { this.box.hidden = true; this.renderCache = null; return; }
     const previous = this.renderCache;
-    if (previous?.pair === pair && previous.config === config && previous.width === rect.width && previous.height === rect.height) { this.box.hidden = false; return; }
+    if (previous?.pair === pair && previous.config === config && previous.width === viewport.width && previous.height === viewport.height && previous.bottom === metrics.bottom) { this.box.hidden = false; return; }
     if (this.source.textContent !== pair.source) this.source.textContent = pair.source;
     if (this.target.textContent !== pair.target) this.target.textContent = pair.target;
     this.target.hidden = !pair.target;
     this.source.style.color = config.sourceColor; this.target.style.color = config.targetColor;
     const textWidth = Math.max(this.textWidth(pair.source, config.sourceFontSize), this.textWidth(pair.target, config.targetFontSize));
-    const width = Math.min(rect.width - 20, 1080, Math.max(100, textWidth + 20));
-    Object.assign(this.box.style, { visibility: 'hidden', width: `${width}px`, height: 'auto', left: `${(rect.width - width) / 2}px`, top: '0px' });
+    const width = Math.min(viewport.width - 20, 1080, Math.max(100, textWidth + 20));
+    Object.assign(this.box.style, { visibility: 'hidden', width: `${width}px`, height: 'auto', left: `${(viewport.width - width) / 2}px`, top: '0px' });
     this.box.hidden = false;
-    this.fitRow(this.source, config.sourceFontSize); this.fitRow(this.target, config.targetFontSize);
-    const budget = Math.max(24, rect.height * .45), firstHeight = this.box.getBoundingClientRect().height;
+    this.fitRow(this.source, config.sourceFontSize, viewport.scaleY); this.fitRow(this.target, config.targetFontSize, viewport.scaleY);
+    const budget = metrics.maxCaptionHeight, firstHeight = this.box.getBoundingClientRect().height / viewport.scaleY;
     if (firstHeight > budget) {
       const scale = Math.max(.1, (budget - 16) / Math.max(1, firstHeight - 16));
-      this.fitRow(this.source, parseFloat(this.source.style.fontSize) * scale);
-      this.fitRow(this.target, parseFloat(this.target.style.fontSize) * scale);
+      this.fitRow(this.source, parseFloat(this.source.style.fontSize) * scale, viewport.scaleY);
+      this.fitRow(this.target, parseFloat(this.target.style.fontSize) * scale, viewport.scaleY);
     }
-    const height = this.box.getBoundingClientRect().height, bottom = Math.max(10, rect.height * .08);
-    this.box.style.top = `${Math.max(0, rect.height - bottom - height)}px`; this.box.style.visibility = 'visible';
-    this.renderCache = { pair, config, width: rect.width, height: rect.height };
+    const height = this.box.getBoundingClientRect().height / viewport.scaleY;
+    if (height > budget + .5) { this.box.hidden = true; this.renderCache = null; return; }
+    this.box.style.top = `${Math.max(0, viewport.height - metrics.bottom - height)}px`; this.box.style.visibility = 'visible';
+    this.renderCache = { pair, config, width: viewport.width, height: viewport.height, bottom: metrics.bottom };
   }
   sync() {
     this.mountToolbar(); this.surface.sync();
