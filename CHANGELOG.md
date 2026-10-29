@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.0-beta.18 — Player-local captions and control clearance
+
+- Replace the fixed 8% subtitle offset during interaction with a protected bottom control region. Paused, focused, hovered, resized, or unconfirmed players keep that region clear; verified hidden controls during idle playback allow the normal low position.
+- Anchor the overlay to the existing positioned player ancestor, including padded and scaled containers. Use only the next paint layer above the iframe instead of fixed z-index 30/1000. Do not replace, reparent, or resize the native iframe.
+- Reposition even when the cue text is unchanged. Keep pointer events transparent, and discard hidden-surface measurements so returning from an occluding panel cannot reuse a zero-height layout.
+- Preserve selected fonts/colors and existing fitting rules. If a small interactive player has insufficient room, hide caption paint temporarily rather than cover controls or shrink the preferences further.
+- Keep native-CC-off verification, ownership/restoration, captions, global settings, downloads, caches, and API v8 unchanged. Existing API-v8 helpers remain compatible and do not require a restart for this client update.
+- Reproduced the published beta.17 overlap in an isolated iframe fixture: the caption extended about 76px into its simulated control region. The fixed layout clears that region by 12px at the reported 886 x 496 size. These are fixture measurements, not a claim of reading YouTube's private DOM.
+- Passed 156 Node tests, all 101 previous isolated UI checks plus 14 control-clearance checks, and 5 native-fetch transport checks. Trusted pointer input changed the iframe seek control from 25 to 81; fullscreen clearance and API-driven exit cleanup passed. Tool-delivered Escape did not exit the test browser's fullscreen, so no native Escape claim is made.
+- A cross-origin iframe cannot be interleaved with a parent page's z-index. This fix uses local composition and a conservative safe area; sustained real YouTube playback and other native menu layouts still require desktop acceptance.
+
 ## 0.5.0-beta.17 — Persistent translation status
 
 - Keep a compact loading indicator visible while English is ready and translation is pending. Native-CC confirmations and old toast timers no longer erase it.

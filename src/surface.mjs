@@ -2,7 +2,7 @@ export function subtitleMetrics(width, height, fontScale = 1, bottomRatio = 0.08
   const preferred = Math.max(10, Math.min(height * 0.3, height * bottomRatio));
   // A parent overlay cannot interleave with controls inside YouTube's iframe.
   // Keep its lower transport/time area clear unless idle controls are confirmed hidden.
-  const controlInset = Math.min(height, Math.max(64, Math.min(128, height * 0.5)));
+  const controlInset = Math.min(height, 128);
   const bottom = Math.min(height, controlsHidden ? preferred : Math.max(preferred, controlInset));
   return {
     fontSize: Math.max(12, Math.min(32, Math.max(14, Math.min(26, width / 32, height / 12)) * fontScale)),
@@ -43,7 +43,9 @@ export class VideoSurface {
     if (this.disposed) return;
     const rect = this.iframe.getBoundingClientRect();
     const offset = this.iframe.offsetParent;
-    const container = offset && offset !== document.body && offset !== document.documentElement ? offset : this.findContainer();
+    const offsetStyle = offset && offset !== document.body && offset !== document.documentElement ? getComputedStyle(offset) : null;
+    const positionedOffset = offsetStyle && (offsetStyle.position !== 'static' || offsetStyle.transform !== 'none') ? offset : null;
+    const container = positionedOffset || this.findContainer();
     const target = container || document.body;
     if (this.host.parentElement !== target) target.append(this.host);
     this.container = container;

@@ -383,14 +383,16 @@ class VideoCaptions {
     Object.assign(this.box.style, { visibility: 'hidden', width: `${width}px`, height: 'auto', left: `${(viewport.width - width) / 2}px`, top: '0px' });
     this.box.hidden = false;
     this.fitRow(this.source, config.sourceFontSize, viewport.scaleY); this.fitRow(this.target, config.targetFontSize, viewport.scaleY);
-    const budget = metrics.maxCaptionHeight, firstHeight = this.box.getBoundingClientRect().height / viewport.scaleY;
+    // Preserve the existing font-fitting budget. If native controls leave too
+    // little room, wait rather than shrinking the user's styles further.
+    const budget = Math.max(24, viewport.height * .45), firstHeight = this.box.getBoundingClientRect().height / viewport.scaleY;
     if (firstHeight > budget) {
       const scale = Math.max(.1, (budget - 16) / Math.max(1, firstHeight - 16));
       this.fitRow(this.source, parseFloat(this.source.style.fontSize) * scale, viewport.scaleY);
       this.fitRow(this.target, parseFloat(this.target.style.fontSize) * scale, viewport.scaleY);
     }
     const height = this.box.getBoundingClientRect().height / viewport.scaleY;
-    if (height > budget + .5) { this.box.hidden = true; this.renderCache = null; return; }
+    if (height > metrics.maxCaptionHeight + .5) { this.box.hidden = true; this.renderCache = null; return; }
     this.box.style.top = `${Math.max(0, viewport.height - metrics.bottom - height)}px`; this.box.style.visibility = 'visible';
     this.renderCache = { pair, config, width: viewport.width, height: viewport.height, bottom: metrics.bottom };
   }
