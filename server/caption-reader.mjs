@@ -44,15 +44,18 @@ export function inspectNativeCc(snapshot, { title, frame }) {
   }
   // Presence only: never read, return, or persist these nodes' text. A native
   // caption appearing inside an otherwise control-free player is a reason to
-  // hide our layer. When pause chrome is visible but its CC checkbox is absent,
-  // centered static text is ambiguous and must fail closed as unknown.
+  // hide our layer. Centered static text is ambiguous only while genuinely
+  // visible playback chrome lacks its CC checkbox.
   const interactive = new Set(['AXButton', 'AXLink', 'AXMenuItem', 'AXSlider', 'AXCheckBox', 'AXPopUpButton', 'AXTextField', 'AXTextArea', 'AXHeading']);
-  const playbackChromeVisible = elements.some(entry => ['AXButton', 'AXSlider', 'AXPopUpButton'].includes(entry.role) && belongsToPlayer(entry));
-  if (playbackChromeVisible) return { state: 'unknown', reason: 'controls-visible' };
-  const nativeCaptionVisible = elements.some(entry => {
-    if (entry.role !== 'AXStaticText' || !belongsToPlayer(entry)) return false;
+  const visibleInPlayer = (entry) => {
+    if (entry.hidden === true || entry.is_hidden === true || entry.AXHidden === true) return false;
     const r = rectOf(entry.frame);
-    if (!r || r.width < 15 || r.height < 7 || r.height > playerRect.height * .25 || r.y < playerRect.y + playerRect.height * .52 || r.y + r.height > playerRect.y + playerRect.height * 1.02 || Math.abs(r.x + r.width / 2 - playerRect.x - playerRect.width / 2) > playerRect.width * .25) return false;
+    return r && Number.isFinite(r.x) && Number.isFinite(r.y) && Number.isFinite(r.width) && Number.isFinite(r.height) && r.width > 0 && r.height > 0 && overlap(playerRect, r) > 0;
+  };
+  const nativeCaptionVisible = elements.some(entry => {
+    if (entry.role !== 'AXStaticText' || !belongsToPlayer(entry) || !visibleInPlayer(entry)) return false;
+    const r = rectOf(entry.frame);
+    if (r.width < 15 || r.height < 7 || r.height > playerRect.height * .25 || r.y < playerRect.y + playerRect.height * .52 || r.y + r.height > playerRect.y + playerRect.height * 1.02 || Math.abs(r.x + r.width / 2 - playerRect.x - playerRect.width / 2) > playerRect.width * .25) return false;
     let parent = byIndex.get(entry.parent_index); const visited = new Set();
     while (parent && parent.element_index !== player.element_index && !visited.has(parent.element_index)) {
       if (interactive.has(parent.role)) return false;
@@ -60,6 +63,8 @@ export function inspectNativeCc(snapshot, { title, frame }) {
     }
     return true;
   });
+  const playbackChromeVisible = elements.some(entry => ['AXButton', 'AXSlider', 'AXPopUpButton'].includes(entry.role) && belongsToPlayer(entry) && visibleInPlayer(entry));
+  if (playbackChromeVisible && nativeCaptionVisible) return { state: 'unknown', reason: 'controls-visible' };
   return nativeCaptionVisible ? { state: 'on', reason: 'native-caption-visible' } : { state: 'unknown', reason: 'controls-hidden' };
 }
 export function nativeCcState(snapshot, scope) { return inspectNativeCc(snapshot, scope).state; }

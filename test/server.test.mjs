@@ -179,6 +179,12 @@ test('native CC state requires same-user verification and only reports an explic
   assert.equal(data.videoId, id); assert.equal(data.state, 'off'); assert.ok(Number.isFinite(data.checkedAt)); assert.equal(read, true);
   assert.equal((await fetch(base + '/v1/youtube/native-cc-state', post({ videoId: id, frame, pid: 1 }))).status, 400);
 });
+test('native CC state forwards the scoped controls-visible reason', async t => {
+  const base = await fixture(t, { nativeCcReader: { read: async () => ({ state: 'unknown', reason: 'controls-visible' }) } });
+  const data = await (await fetch(base + '/v1/youtube/native-cc-state', post({ videoId: id, frame }))).json();
+  assert.deepEqual(data.reason, 'controls-visible');
+  assert.equal(data.state, 'unknown');
+});
 test('untrusted peers and origins cannot read any accessibility data', async (t) => {
   let reads = 0;
   const base = await fixture(t, { verifyPeer: async () => { throw Object.assign(new Error('Denied'), { status: 403 }); }, nativeCcReader: { read: () => { reads++; } } });

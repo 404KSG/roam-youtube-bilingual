@@ -4,6 +4,6 @@
 export function resolveNativeCc(previous, observation) {
   if (observation?.state === 'on') return 'on';
   if (observation?.state === 'off') return 'off';
-  if (previous === 'off' && observation?.reason === 'controls-hidden') return 'off';
+  if (previous === 'off' && ['controls-hidden', 'controls-visible'].includes(observation?.reason)) return 'off';
   return 'unknown';
 }

@@ -40,6 +40,17 @@ test('visible playback chrome without a CC checkbox cannot turn centered pause t
   snapshot.elements.push(node(8, 2, 'AXStaticText', 'Chapter title', { x: 350, y: 480, w: 300, h: 24 }));
   assert.deepEqual(inspectNativeCc(snapshot, { title: 'Test video', frame }), { state: 'unknown', reason: 'controls-visible' });
 });
+test('only visible playback chrome with centered static text is controls-visible', () => {
+  const snapshot = fixture(); snapshot.elements = snapshot.elements.filter(entry => entry.element_index !== 3);
+  snapshot.elements.push(node(7, 2, 'AXButton', 'Play', { x: 120, y: 500, w: 0, h: 0 }));
+  assert.deepEqual(inspectNativeCc(snapshot, { title: 'Test video', frame }), { state: 'unknown', reason: 'controls-hidden' });
+  snapshot.elements[3] = node(7, 2, 'AXButton', 'Play', { x: 120, y: 500, w: 32, h: 32 });
+  assert.deepEqual(inspectNativeCc(snapshot, { title: 'Test video', frame }), { state: 'unknown', reason: 'controls-hidden' });
+  snapshot.elements[3] = { ...node(7, 2, 'AXButton', 'Play', { x: 2000, y: 500, w: 32, h: 32 }), hidden: true };
+  assert.deepEqual(inspectNativeCc(snapshot, { title: 'Test video', frame }), { state: 'unknown', reason: 'controls-hidden' });
+  snapshot.elements.push(node(8, 2, 'AXStaticText', 'Chapter title', { x: 350, y: 480, w: 300, h: 24 }));
+  assert.deepEqual(inspectNativeCc(snapshot, { title: 'Test video', frame }), { state: 'on', reason: 'native-caption-visible' });
+});
 test('video metadata uses the supplied language list and removes raw URLs', () => {
   const raw = fixtureMetadata(); raw.subtitles.en[0].url += '&signature=secret-not-returned';
   const info = sanitizeVideoInfo(raw, 'vif8NQcjVf0');

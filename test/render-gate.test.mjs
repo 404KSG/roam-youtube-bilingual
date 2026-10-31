@@ -20,7 +20,7 @@ function harness({ request = async () => ({ ok: true }), now = Date.now, Caption
   const Controller = vm.runInNewContext(`${controller}; VideoCaptions`, context);
   const video = Object.create(Controller.prototype);
   Object.assign(video, { enabled: false, wantsEnabled: false, config: { target: 'zh-Hans', fontSize: 20 }, loading: false, disposed: false, epoch: 0, videoId: 'vif8NQcjVf0',
-    captionData: null, box: { hidden: false }, source: { textContent: 'English' }, target: { textContent: '中文' }, noticeBox: { dataset: {} },
+    nativeWasOn: null, nativeChanged: false, nativeControlsHidden: false, nativeControlsVisible: false, captionData: null, box: { hidden: false }, source: { textContent: 'English' }, target: { textContent: '中文' }, noticeBox: { dataset: {} },
     clock: { unloadCaptions: () => commands.push('off'), restoreCaptions: () => { assert.equal(video.box.hidden, true); commands.push('restore'); } },
     updateIcon() {}, notice(message) { this.lastNotice = message; },
     loadInfo: async () => ({ sourceLanguage: 'en', languages: [{ code: 'zh-Hans' }] }),
@@ -262,4 +262,23 @@ test('an explicit CC-off control observation rearms a later real CC-on warning',
   assert.deepEqual(notices, ['Native captions are still on. Bilingual subtitles remain hidden.', 'Native captions are still on. Bilingual subtitles remain hidden.']);
   assert.equal(video.nativeWasOn, true);
   assert.equal(video.nativeChanged, true);
+});
+test('visible chrome without its CC checkbox temporarily hides a confirmed-off overlay without wake or ownership', async () => {
+  const observations = [
+    { state: 'off', reason: 'control' },
+    { state: 'unknown', reason: 'controls-visible' },
+    { state: 'unknown', reason: 'controls-hidden' },
+  ];
+  const { video, commands } = harness({ request: async () => ({ videoId: 'vif8NQcjVf0', ...observations.shift(), checkedAt: Date.now() }) });
+  installCaptionData(video, [{ start: 0, end: 2, text: 'English' }]);
+  Object.assign(video, { enabled: true, time: 1, info: { sourceLanguage: 'en' }, surface: { host: { style: { display: 'block' } } }, screenFrame: () => ({ x: 0, y: 0, width: 800, height: 450 }) });
+  video.clock.isSynchronized = () => true; video.drawPair = () => {};
+  let notices = 0; video.notice = () => { notices++; };
+  await video.checkNativeCc(); assert.equal(video.pair.source, 'English'); video.nextCcCheck = 0;
+  await video.checkNativeCc(); assert.equal(video.ccState, 'off'); assert.equal(video.pair, null); video.nextCcCheck = 0;
+  await video.checkNativeCc(); assert.equal(video.pair.source, 'English');
+  assert.deepEqual(commands, []);
+  assert.equal(notices, 0);
+  assert.equal(video.nativeWasOn, false);
+  assert.equal(video.nativeChanged, false);
 });

@@ -3,19 +3,28 @@ import { joinCaptionFragments } from './alignment.mjs';
 
 function joinSourceFragments(previous, next) {
   const before = previous.trim().split(/\s+/), after = next.trim().split(/\s+/);
+  if (before.length === after.length && before.every((word, index) => word === after[index])) return `${previous} ${next}`;
   let shared = 0;
-  for (let size = Math.min(before.length, after.length) - 1; size >= 2; size--) {
+  for (let size = Math.min(before.length, after.length); size >= 2; size--) {
     if (before.slice(-size).every((word, index) => word === after[index])) { shared = size; break; }
   }
-  return previous + ' ' + after.slice(shared).join(' ');
+  const remainder = after.slice(shared).join(' ');
+  return remainder ? `${previous} ${remainder}` : previous;
 }
 function addTargetCues(targetCues, pair) { for (const cue of pair.targetCues || []) targetCues.add(cue); }
+function targetFragment(pair, targetCues, language) {
+  if (!Array.isArray(pair.targetCues)) return pair.target;
+  return joinCaptionFragments(pair.targetCues.filter(cue => !targetCues.has(cue)), language);
+}
+function appendTarget(target, pair, targetCues, language) {
+  const fragment = targetFragment(pair, targetCues, language);
+  return fragment ? target ? joinCaptionFragments([{ text: target }, { text: fragment }], language) : fragment : target;
+}
 function createPrefixes(segment, language) {
   let source = '', target = ''; const targetCues = new Set();
   segment.prefixes = segment.parts.map((part, index) => {
     source = index ? joinSourceFragments(source, part.source) : part.source;
-    const duplicateFallback = part.fallbackTarget && targetCues.has(part.fallbackTarget);
-    if (!duplicateFallback) target = index ? joinCaptionFragments([{ text: target }, { text: part.target }], language) : part.target;
+    target = appendTarget(target, part, targetCues, language);
     addTargetCues(targetCues, part);
     return { start: segment.start, end: segment.end, source, target };
   });
@@ -28,13 +37,13 @@ export function readingSegments(pairs, language) {
   for (const pair of pairs) {
     const last = result.at(-1);
     const complete = last && /[.!?]["'”’)\]]*$/.test(last.source) && !/\b(?:Mr|Mrs|Ms|Dr|Prof|St)\.$/.test(last.source);
+    const target = last && targetFragment(pair, last.targetCues, language);
     const canJoin = last && !complete && last.target && pair.target && !/^\s*[-–—]\s/.test(pair.source)
       && pair.start - last.end <= .2 && pair.end - last.start <= 8 && last.parts.length < 4
-      && last.source.length + pair.source.length < 220 && last.target.length + pair.target.length < 180;
+      && last.source.length + pair.source.length < 220 && last.target.length + target.length < 180;
     if (canJoin) {
-      const duplicateFallback = pair.fallbackTarget && last.targetCues.has(pair.fallbackTarget);
       last.end = pair.end; last.source = joinSourceFragments(last.source, pair.source);
-      if (!duplicateFallback) last.target = joinCaptionFragments([{ text: last.target }, { text: pair.target }], language);
+      last.target = appendTarget(last.target, pair, last.targetCues, language);
       addTargetCues(last.targetCues, pair); last.parts.push(pair);
     } else {
       const targetCues = new Set(); addTargetCues(targetCues, pair);

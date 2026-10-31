@@ -430,7 +430,7 @@ function releaseRenderer(host, owner) {
 function resolveNativeCc(previous, observation) {
   if (observation?.state === 'on') return 'on';
   if (observation?.state === 'off') return 'off';
-  if (previous === 'off' && observation?.reason === 'controls-hidden') return 'off';
+  if (previous === 'off' && ['controls-hidden', 'controls-visible'].includes(observation?.reason)) return 'off';
   return 'unknown';
 }
 
@@ -559,19 +559,28 @@ function alignCaptionTracks(sourceCues, targetCues, language) {
 
 function joinSourceFragments(previous, next) {
   const before = previous.trim().split(/\s+/), after = next.trim().split(/\s+/);
+  if (before.length === after.length && before.every((word, index) => word === after[index])) return `${previous} ${next}`;
   let shared = 0;
-  for (let size = Math.min(before.length, after.length) - 1; size >= 2; size--) {
+  for (let size = Math.min(before.length, after.length); size >= 2; size--) {
     if (before.slice(-size).every((word, index) => word === after[index])) { shared = size; break; }
   }
-  return previous + ' ' + after.slice(shared).join(' ');
+  const remainder = after.slice(shared).join(' ');
+  return remainder ? `${previous} ${remainder}` : previous;
 }
 function addTargetCues(targetCues, pair) { for (const cue of pair.targetCues || []) targetCues.add(cue); }
+function targetFragment(pair, targetCues, language) {
+  if (!Array.isArray(pair.targetCues)) return pair.target;
+  return joinCaptionFragments(pair.targetCues.filter(cue => !targetCues.has(cue)), language);
+}
+function appendTarget(target, pair, targetCues, language) {
+  const fragment = targetFragment(pair, targetCues, language);
+  return fragment ? target ? joinCaptionFragments([{ text: target }, { text: fragment }], language) : fragment : target;
+}
 function createPrefixes(segment, language) {
   let source = '', target = ''; const targetCues = new Set();
   segment.prefixes = segment.parts.map((part, index) => {
     source = index ? joinSourceFragments(source, part.source) : part.source;
-    const duplicateFallback = part.fallbackTarget && targetCues.has(part.fallbackTarget);
-    if (!duplicateFallback) target = index ? joinCaptionFragments([{ text: target }, { text: part.target }], language) : part.target;
+    target = appendTarget(target, part, targetCues, language);
     addTargetCues(targetCues, part);
     return { start: segment.start, end: segment.end, source, target };
   });
@@ -584,13 +593,13 @@ function readingSegments(pairs, language) {
   for (const pair of pairs) {
     const last = result.at(-1);
     const complete = last && /[.!?]["'”’)\]]*$/.test(last.source) && !/\b(?:Mr|Mrs|Ms|Dr|Prof|St)\.$/.test(last.source);
+    const target = last && targetFragment(pair, last.targetCues, language);
     const canJoin = last && !complete && last.target && pair.target && !/^\s*[-–—]\s/.test(pair.source)
       && pair.start - last.end <= .2 && pair.end - last.start <= 8 && last.parts.length < 4
-      && last.source.length + pair.source.length < 220 && last.target.length + pair.target.length < 180;
+      && last.source.length + pair.source.length < 220 && last.target.length + target.length < 180;
     if (canJoin) {
-      const duplicateFallback = pair.fallbackTarget && last.targetCues.has(pair.fallbackTarget);
       last.end = pair.end; last.source = joinSourceFragments(last.source, pair.source);
-      if (!duplicateFallback) last.target = joinCaptionFragments([{ text: last.target }, { text: pair.target }], language);
+      last.target = appendTarget(last.target, pair, last.targetCues, language);
       addTargetCues(last.targetCues, pair); last.parts.push(pair);
     } else {
       const targetCues = new Set(); addTargetCues(targetCues, pair);
@@ -927,7 +936,7 @@ class VideoCaptions {
     const saved = preferences.get(this.videoId); this.config = validateConfig(saved); this.wantsEnabled = saved.enabled; this.restoreAttempted = false;
     this.preferenceError = preferences.saveWarning; this.preferenceNotice = preferences.notice;
     this.captionData = null; this.time = 0; this.epoch = 0; this.enabled = false; this.loading = false; this.ccState = 'unknown'; this.ccVerifiedAt = 0; this.nativeWasOn = null; this.nativeChanged = false; this.nativeCcOnNoticeEpoch = null;
-    this.nativeControlsHidden = false;
+    this.nativeControlsHidden = false; this.nativeControlsVisible = false;
     this.surface = new VideoSurface(iframe, STYLE, { onLayoutChange: () => this.drawPair() }); this.surface.host.dataset.version = VERSION;
     this.box = el('div', 'ryb-caption-box'); this.box.hidden = true; this.box.setAttribute('aria-label', 'Bilingual subtitles');
     this.source = el('div', 'ryb-line ryb-source'); this.source.dir = 'ltr';
@@ -1105,13 +1114,13 @@ class VideoCaptions {
   }
   clearPair() { this.pair = null; this.renderCache = null; this.box.hidden = true; this.source.textContent = ''; this.target.textContent = ''; }
   closeNativeGate() {
-    this.ccState = 'unknown'; this.ccVerifiedAt = 0; this.nativeControlsHidden = false; this.ccRequest?.abort(); this.ccRequest = null; this.clearPair();
+    this.ccState = 'unknown'; this.ccVerifiedAt = 0; this.nativeControlsHidden = false; this.nativeControlsVisible = false; this.ccRequest?.abort(); this.ccRequest = null; this.clearPair();
     this.nextCcCheck = 0;
   }
   turnOff() {
     this.epoch++; this.enabled = false; this.loading = false;
     this.startRequest?.abort(); this.startRequest = null; this.session = null; this.captionData = null; this.alignment = null; this.ccRequest?.abort(); this.ccRequest = null;
-    this.ccState = 'unknown'; this.ccVerifiedAt = 0; this.nativeControlsHidden = false; this.clearPair();
+    this.ccState = 'unknown'; this.ccVerifiedAt = 0; this.nativeControlsHidden = false; this.nativeControlsVisible = false; this.clearPair();
     // Never switch native CC merely because a download failed or a dialog closed.
     // Restore only a state this instance positively observed and then changed.
     if (this.nativeChanged && this.nativeWasOn === true) this.clock?.restoreCaptions();
@@ -1140,6 +1149,7 @@ class VideoCaptions {
       if (!Number.isFinite(data.checkedAt) || data.checkedAt < before - 100 || data.checkedAt > Date.now() + 100 || Date.now() - data.checkedAt > 1500) { this.closeNativeGate(); return; }
       this.ccState = resolveNativeCc(this.ccState, data);
       this.nativeControlsHidden = this.ccState === 'off' && data.reason === 'controls-hidden';
+      this.nativeControlsVisible = this.ccState === 'off' && data.reason === 'controls-visible';
       this.nextCcCheck = Date.now() + 700;
       if (this.ccState !== 'off') {
         this.clearPair();
@@ -1165,7 +1175,7 @@ class VideoCaptions {
     } finally { if (this.ccRequest === abort) this.ccRequest = null; }
   }
   updatePair() {
-    if (!this.enabled || this.ccState !== 'off' || Date.now() - this.ccVerifiedAt > 1500 || this.disposed || !this.clock?.isSynchronized()) { this.clearPair(); return; }
+    if (!this.enabled || this.ccState !== 'off' || this.nativeControlsVisible || Date.now() - this.ccVerifiedAt > 1500 || this.disposed || !this.clock?.isSynchronized()) { this.clearPair(); return; }
     const data = this.captionData;
     if (!data?.source || data.epoch !== this.epoch || data.videoId !== this.videoId || data.targetLanguage !== this.config.target) { this.clearPair(); return; }
     const sourceCues = data.source.cues, targetCues = data.target?.sourceFingerprint === data.source.fingerprint && data.target.language === data.targetLanguage ? data.target.cues : null;
@@ -1205,7 +1215,7 @@ class VideoCaptions {
     row.dataset.fontSize = String(parseFloat(row.style.fontSize));
   }
   drawPair() {
-    if (!this.enabled || this.ccState !== 'off' || Date.now() - this.ccVerifiedAt > 1500 || !this.pair || this.disposed) { this.box.hidden = true; return; }
+    if (!this.enabled || this.ccState !== 'off' || this.nativeControlsVisible || Date.now() - this.ccVerifiedAt > 1500 || !this.pair || this.disposed) { this.box.hidden = true; return; }
     const rect = this.iframe.getBoundingClientRect(), pair = this.pair, config = this.config;
     if (rect.width < 160 || rect.height < 90 || !pair.source || this.surface.host.style.display === 'none') { this.box.hidden = true; this.renderCache = null; return; }
     const viewport = this.surface.viewport || { width: rect.width, height: rect.height, scaleY: 1 };

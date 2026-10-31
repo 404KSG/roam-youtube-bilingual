@@ -93,7 +93,7 @@ class VideoCaptions {
     const saved = preferences.get(this.videoId); this.config = validateConfig(saved); this.wantsEnabled = saved.enabled; this.restoreAttempted = false;
     this.preferenceError = preferences.saveWarning; this.preferenceNotice = preferences.notice;
     this.captionData = null; this.time = 0; this.epoch = 0; this.enabled = false; this.loading = false; this.ccState = 'unknown'; this.ccVerifiedAt = 0; this.nativeWasOn = null; this.nativeChanged = false; this.nativeCcOnNoticeEpoch = null;
-    this.nativeControlsHidden = false;
+    this.nativeControlsHidden = false; this.nativeControlsVisible = false;
     this.surface = new VideoSurface(iframe, STYLE, { onLayoutChange: () => this.drawPair() }); this.surface.host.dataset.version = VERSION;
     this.box = el('div', 'ryb-caption-box'); this.box.hidden = true; this.box.setAttribute('aria-label', 'Bilingual subtitles');
     this.source = el('div', 'ryb-line ryb-source'); this.source.dir = 'ltr';
@@ -271,13 +271,13 @@ class VideoCaptions {
   }
   clearPair() { this.pair = null; this.renderCache = null; this.box.hidden = true; this.source.textContent = ''; this.target.textContent = ''; }
   closeNativeGate() {
-    this.ccState = 'unknown'; this.ccVerifiedAt = 0; this.nativeControlsHidden = false; this.ccRequest?.abort(); this.ccRequest = null; this.clearPair();
+    this.ccState = 'unknown'; this.ccVerifiedAt = 0; this.nativeControlsHidden = false; this.nativeControlsVisible = false; this.ccRequest?.abort(); this.ccRequest = null; this.clearPair();
     this.nextCcCheck = 0;
   }
   turnOff() {
     this.epoch++; this.enabled = false; this.loading = false;
     this.startRequest?.abort(); this.startRequest = null; this.session = null; this.captionData = null; this.alignment = null; this.ccRequest?.abort(); this.ccRequest = null;
-    this.ccState = 'unknown'; this.ccVerifiedAt = 0; this.nativeControlsHidden = false; this.clearPair();
+    this.ccState = 'unknown'; this.ccVerifiedAt = 0; this.nativeControlsHidden = false; this.nativeControlsVisible = false; this.clearPair();
     // Never switch native CC merely because a download failed or a dialog closed.
     // Restore only a state this instance positively observed and then changed.
     if (this.nativeChanged && this.nativeWasOn === true) this.clock?.restoreCaptions();
@@ -306,6 +306,7 @@ class VideoCaptions {
       if (!Number.isFinite(data.checkedAt) || data.checkedAt < before - 100 || data.checkedAt > Date.now() + 100 || Date.now() - data.checkedAt > 1500) { this.closeNativeGate(); return; }
       this.ccState = resolveNativeCc(this.ccState, data);
       this.nativeControlsHidden = this.ccState === 'off' && data.reason === 'controls-hidden';
+      this.nativeControlsVisible = this.ccState === 'off' && data.reason === 'controls-visible';
       this.nextCcCheck = Date.now() + 700;
       if (this.ccState !== 'off') {
         this.clearPair();
@@ -331,7 +332,7 @@ class VideoCaptions {
     } finally { if (this.ccRequest === abort) this.ccRequest = null; }
   }
   updatePair() {
-    if (!this.enabled || this.ccState !== 'off' || Date.now() - this.ccVerifiedAt > 1500 || this.disposed || !this.clock?.isSynchronized()) { this.clearPair(); return; }
+    if (!this.enabled || this.ccState !== 'off' || this.nativeControlsVisible || Date.now() - this.ccVerifiedAt > 1500 || this.disposed || !this.clock?.isSynchronized()) { this.clearPair(); return; }
     const data = this.captionData;
     if (!data?.source || data.epoch !== this.epoch || data.videoId !== this.videoId || data.targetLanguage !== this.config.target) { this.clearPair(); return; }
     const sourceCues = data.source.cues, targetCues = data.target?.sourceFingerprint === data.source.fingerprint && data.target.language === data.targetLanguage ? data.target.cues : null;
@@ -371,7 +372,7 @@ class VideoCaptions {
     row.dataset.fontSize = String(parseFloat(row.style.fontSize));
   }
   drawPair() {
-    if (!this.enabled || this.ccState !== 'off' || Date.now() - this.ccVerifiedAt > 1500 || !this.pair || this.disposed) { this.box.hidden = true; return; }
+    if (!this.enabled || this.ccState !== 'off' || this.nativeControlsVisible || Date.now() - this.ccVerifiedAt > 1500 || !this.pair || this.disposed) { this.box.hidden = true; return; }
     const rect = this.iframe.getBoundingClientRect(), pair = this.pair, config = this.config;
     if (rect.width < 160 || rect.height < 90 || !pair.source || this.surface.host.style.display === 'none') { this.box.hidden = true; this.renderCache = null; return; }
     const viewport = this.surface.viewport || { width: rect.width, height: rect.height, scaleY: 1 };

@@ -99,7 +99,7 @@ export function makeServer({ port = 17321, captionFetcher, captionBatchFetcher =
         const info = await resolveDisplayInfo(body.videoId, controller.signal);
         const result = await nativeCcReader.read({ title: info.title, frame: body.frame, signal: controller.signal });
         const state = ['on', 'off', 'unknown'].includes(result?.state) ? result.state : 'unknown';
-        const reasons = new Set(['control', 'controls-hidden', 'native-caption-visible', 'player-not-visible', 'unrecognized-control', 'busy', 'window-not-visible']);
+        const reasons = new Set(['control', 'controls-hidden', 'controls-visible', 'native-caption-visible', 'player-not-visible', 'unrecognized-control', 'busy', 'window-not-visible']);
         return json(200, { videoId: body.videoId, state, checkedAt: Number.isFinite(result?.checkedAt) ? result.checkedAt : Date.now(), ...(reasons.has(result?.reason) ? { reason: result.reason } : {}) });
       }
       if (path === '/v1/youtube/caption-session' && !isCaptionTrackKey(body.target)) return json(400, { error: 'Invalid subtitle track identifier.' });
