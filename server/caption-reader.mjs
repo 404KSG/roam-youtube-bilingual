@@ -32,26 +32,26 @@ export function inspectNativeCc(snapshot, { title, frame }) {
     }
     return false;
   };
+  const visibleInPlayer = (entry) => {
+    if (entry.hidden === true || entry.is_hidden === true || entry.AXHidden === true) return false;
+    const r = rectOf(entry.frame);
+    return r && Number.isFinite(r.x) && Number.isFinite(r.y) && Number.isFinite(r.width) && Number.isFinite(r.height) && r.width > 0 && r.height > 0 && overlap(playerRect, r) > 0;
+  };
   const checkbox = elements.find((entry) => {
     const rect = rectOf(entry.frame), cx = rect && rect.x + rect.width / 2, cy = rect && rect.y + rect.height / 2;
-    return entry.role === 'AXCheckBox' && belongsToPlayer(entry) && rect && rect.width > 0 && rect.height > 0 && Number.isFinite(cx) && Number.isFinite(cy) && cx >= playerRect.x && cx <= playerRect.x + playerRect.width && cy >= playerRect.y && cy <= playerRect.y + playerRect.height;
+    return entry.role === 'AXCheckBox' && belongsToPlayer(entry) && visibleInPlayer(entry) && Number.isFinite(cx) && Number.isFinite(cy) && cx >= playerRect.x && cx <= playerRect.x + playerRect.width && cy >= playerRect.y && cy <= playerRect.y + playerRect.height;
   });
   if (checkbox) {
     const label = String(checkbox.label || checkbox.value || '').trim();
-    if (label === 'Subtitles/CC turned on') return { state: 'on', reason: 'control' };
-    if (label === 'Subtitles/CC turned off') return { state: 'off', reason: 'control' };
-    return { state: 'unknown', reason: 'unrecognized-control' };
+    if (label === 'Subtitles/CC turned on') return { state: 'on', reason: 'control', controlsVisible: true };
+    if (label === 'Subtitles/CC turned off') return { state: 'off', reason: 'control', controlsVisible: true };
+    return { state: 'unknown', reason: 'unrecognized-control', controlsVisible: true };
   }
   // Presence only: never read, return, or persist these nodes' text. A native
   // caption appearing inside an otherwise control-free player is a reason to
   // hide our layer. Centered static text is ambiguous only while genuinely
   // visible playback chrome lacks its CC checkbox.
   const interactive = new Set(['AXButton', 'AXLink', 'AXMenuItem', 'AXSlider', 'AXCheckBox', 'AXPopUpButton', 'AXTextField', 'AXTextArea', 'AXHeading']);
-  const visibleInPlayer = (entry) => {
-    if (entry.hidden === true || entry.is_hidden === true || entry.AXHidden === true) return false;
-    const r = rectOf(entry.frame);
-    return r && Number.isFinite(r.x) && Number.isFinite(r.y) && Number.isFinite(r.width) && Number.isFinite(r.height) && r.width > 0 && r.height > 0 && overlap(playerRect, r) > 0;
-  };
   const nativeCaptionVisible = elements.some(entry => {
     if (entry.role !== 'AXStaticText' || !belongsToPlayer(entry) || !visibleInPlayer(entry)) return false;
     const r = rectOf(entry.frame);
@@ -64,8 +64,10 @@ export function inspectNativeCc(snapshot, { title, frame }) {
     return true;
   });
   const playbackChromeVisible = elements.some(entry => ['AXButton', 'AXSlider', 'AXPopUpButton'].includes(entry.role) && belongsToPlayer(entry) && visibleInPlayer(entry));
-  if (playbackChromeVisible && nativeCaptionVisible) return { state: 'unknown', reason: 'controls-visible' };
-  return nativeCaptionVisible ? { state: 'on', reason: 'native-caption-visible' } : { state: 'unknown', reason: 'controls-hidden' };
+  if (playbackChromeVisible && nativeCaptionVisible) return { state: 'unknown', reason: 'controls-visible', controlsVisible: true };
+  // Preserve the legacy CC reason, but report player chrome independently:
+  // a missing CC checkbox is not proof that Play/Seek controls are hidden.
+  return nativeCaptionVisible ? { state: 'on', reason: 'native-caption-visible', controlsVisible: false } : { state: 'unknown', reason: 'controls-hidden', controlsVisible: playbackChromeVisible };
 }
 export function nativeCcState(snapshot, scope) { return inspectNativeCc(snapshot, scope).state; }
 

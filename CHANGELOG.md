@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0-beta.20 — Paused captions follow hidden controls
+
+- Fix captions remaining 128px above the bottom after pausing and moving the pointer away. Previously, only playback state 1 could use the low position, and sticky iframe focus independently held the raised position.
+- Allow both playing and paused captions to return to the normal 8% bottom gap after fresh hidden-controls evidence and the existing 3.5-second interaction grace period. Do not blur the iframe or change playback; hover and recent interaction still protect controls.
+- Report a scoped `controlsVisible` boolean independently of native-CC evidence. A missing CC checkbox no longer implies that Play/Seek controls are hidden. Missing or malformed visibility observations keep captions conservatively raised; stale, ambiguous, or lost CC scope still hides the overlay.
+- Keep text, timing, fonts, preferences, caption downloads, native-CC ownership, and pause-warning recovery unchanged. API v8 remains compatible, but both the helper and extension must be updated for the new visibility observation.
+- Passed 179 Node tests and 142 isolated browser checks, including 14 new paused-position checks. Seven targeted tests fail before the fix. With actual pointer input and retained iframe focus in a synthetic 886 × 496 player, the paused bottom gap changes from 128px to 39.69px; reappearing controls restore the protected gap. No live YouTube/Roam acceptance or use of private screenshot content in test artifacts is claimed.
+
 ## 0.5.0-beta.19 — Subtitle stability and pause-safe CC evidence
 
 - Keep bounded reading groups, but do not reveal later source cues before their start times. Preserve source-led translation alignment and reuse cached display prefixes between boundaries; real gaps, seeks, speaker changes, and narrow-view fallback remain time-based.

@@ -305,7 +305,9 @@ class VideoCaptions {
       if (['x', 'y', 'width', 'height'].some(key => Math.abs(frame[key] - currentFrame[key]) > 4)) { this.nextCcCheck = 0; return; }
       if (!Number.isFinite(data.checkedAt) || data.checkedAt < before - 100 || data.checkedAt > Date.now() + 100 || Date.now() - data.checkedAt > 1500) { this.closeNativeGate(); return; }
       this.ccState = resolveNativeCc(this.ccState, data);
-      this.nativeControlsHidden = this.ccState === 'off' && data.reason === 'controls-hidden';
+      // Missing CC controls alone do not prove the transport is hidden.
+      // Older helpers omit this flag and keep the conservative high position.
+      this.nativeControlsHidden = this.ccState === 'off' && data.reason === 'controls-hidden' && data.controlsVisible === false;
       this.nativeControlsVisible = this.ccState === 'off' && data.reason === 'controls-visible';
       this.nextCcCheck = Date.now() + 700;
       if (this.ccState !== 'off') {
@@ -379,7 +381,7 @@ class VideoCaptions {
     const rect = this.iframe.getBoundingClientRect(), pair = this.pair, config = this.config;
     if (rect.width < 160 || rect.height < 90 || !pair.source || this.surface.host.style.display === 'none') { this.box.hidden = true; this.renderCache = null; return; }
     const viewport = this.surface.viewport || { width: rect.width, height: rect.height, scaleY: 1 };
-    const controlsHidden = this.nativeControlsHidden && this.clock?.state === 1 && !this.surface.isInteracting();
+    const controlsHidden = this.nativeControlsHidden && [1, 2].includes(this.clock?.state) && !this.surface.isInteracting({ controlsHidden: true });
     const metrics = subtitleMetrics(viewport.width, viewport.height, 1, .08, { controlsHidden });
     if (metrics.maxCaptionHeight < 24) { this.box.hidden = true; this.renderCache = null; return; }
     const previous = this.renderCache;

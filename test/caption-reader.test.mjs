@@ -29,27 +29,46 @@ test('a Roam checkbox overlapping the video cannot falsely confirm native CC off
 });
 test('hidden controls and a missing player are distinct; native caption nodes prove on', () => {
   const snapshot = fixture(); snapshot.elements = snapshot.elements.filter(entry => entry.element_index !== 3);
-  assert.deepEqual(inspectNativeCc(snapshot, { title: 'Test video', frame }), { state: 'unknown', reason: 'controls-hidden' });
+  assert.deepEqual(inspectNativeCc(snapshot, { title: 'Test video', frame }), { state: 'unknown', reason: 'controls-hidden', controlsVisible: false });
   assert.deepEqual(inspectNativeCc(snapshot, { title: 'Other video', frame }), { state: 'unknown', reason: 'player-not-visible' });
   snapshot.elements.push(node(7, 2, 'AXStaticText', 'Native caption content', { x: 350, y: 480, w: 300, h: 24 }));
-  assert.deepEqual(inspectNativeCc(snapshot, { title: 'Test video', frame }), { state: 'on', reason: 'native-caption-visible' });
+  assert.deepEqual(inspectNativeCc(snapshot, { title: 'Test video', frame }), { state: 'on', reason: 'native-caption-visible', controlsVisible: false });
 });
 test('visible playback chrome without a CC checkbox cannot turn centered pause text into CC-on evidence', () => {
   const snapshot = fixture(); snapshot.elements = snapshot.elements.filter(entry => entry.element_index !== 3);
   snapshot.elements.push(node(7, 2, 'AXButton', 'Play', { x: 120, y: 500, w: 32, h: 32 }));
   snapshot.elements.push(node(8, 2, 'AXStaticText', 'Chapter title', { x: 350, y: 480, w: 300, h: 24 }));
-  assert.deepEqual(inspectNativeCc(snapshot, { title: 'Test video', frame }), { state: 'unknown', reason: 'controls-visible' });
+  assert.deepEqual(inspectNativeCc(snapshot, { title: 'Test video', frame }), { state: 'unknown', reason: 'controls-visible', controlsVisible: true });
 });
 test('only visible playback chrome with centered static text is controls-visible', () => {
+  const base = fixture().elements.filter(entry => entry.element_index !== 3);
+  for (const [chrome, visible] of [
+    [node(7, 2, 'AXButton', 'Play', { x: 120, y: 500, w: 0, h: 0 }), false],
+    [node(7, 2, 'AXButton', 'Play', { x: 120, y: 500, w: 32, h: 32 }), true],
+    [{ ...node(7, 2, 'AXButton', 'Play', { x: 120, y: 500, w: 32, h: 32 }), hidden: true }, false],
+    [node(7, 2, 'AXButton', 'Play', { x: 2000, y: 500, w: 32, h: 32 }), false],
+  ]) {
+    const snapshot = { elements: [...base, chrome] };
+    assert.deepEqual(inspectNativeCc(snapshot, { title: 'Test video', frame }), { state: 'unknown', reason: 'controls-hidden', controlsVisible: visible });
+    snapshot.elements.push(node(8, 2, 'AXStaticText', 'Chapter title', { x: 350, y: 480, w: 300, h: 24 }));
+    assert.deepEqual(inspectNativeCc(snapshot, { title: 'Test video', frame }), visible ? { state: 'unknown', reason: 'controls-visible', controlsVisible: true } : { state: 'on', reason: 'native-caption-visible', controlsVisible: false });
+  }
+});
+test('player-control visibility is independent of the CC evidence reason', () => {
+  const scope = { title: 'Test video', frame };
+  assert.equal(inspectNativeCc(fixture(), scope).controlsVisible, true);
   const snapshot = fixture(); snapshot.elements = snapshot.elements.filter(entry => entry.element_index !== 3);
-  snapshot.elements.push(node(7, 2, 'AXButton', 'Play', { x: 120, y: 500, w: 0, h: 0 }));
-  assert.deepEqual(inspectNativeCc(snapshot, { title: 'Test video', frame }), { state: 'unknown', reason: 'controls-hidden' });
-  snapshot.elements[3] = node(7, 2, 'AXButton', 'Play', { x: 120, y: 500, w: 32, h: 32 });
-  assert.deepEqual(inspectNativeCc(snapshot, { title: 'Test video', frame }), { state: 'unknown', reason: 'controls-hidden' });
-  snapshot.elements[3] = { ...node(7, 2, 'AXButton', 'Play', { x: 2000, y: 500, w: 32, h: 32 }), hidden: true };
-  assert.deepEqual(inspectNativeCc(snapshot, { title: 'Test video', frame }), { state: 'unknown', reason: 'controls-hidden' });
-  snapshot.elements.push(node(8, 2, 'AXStaticText', 'Chapter title', { x: 350, y: 480, w: 300, h: 24 }));
-  assert.deepEqual(inspectNativeCc(snapshot, { title: 'Test video', frame }), { state: 'on', reason: 'native-caption-visible' });
+  assert.equal(inspectNativeCc(snapshot, scope).controlsVisible, false);
+  snapshot.elements.push(node(7, 2, 'AXSlider', 'Playback position', { x: 120, y: 490, w: 730, h: 20 }));
+  const visible = inspectNativeCc(snapshot, scope);
+  assert.equal(visible.reason, 'controls-hidden', 'legacy CC evidence remains distinct from transport visibility');
+  assert.equal(visible.controlsVisible, true, 'a visible transport cannot be treated as hidden just because CC is missing');
+  assert.equal(inspectNativeCc(snapshot, { title: 'Other video', frame }).controlsVisible, undefined);
+});
+test('hidden CC controls do not establish visible chrome or an explicit OFF observation', () => {
+  const snapshot = fixture(); snapshot.elements.find(e => e.element_index === 3).hidden = true;
+  const result = inspectNativeCc(snapshot, { title: 'Test video', frame });
+  assert.equal(result.state, 'unknown'); assert.equal(result.controlsVisible, false);
 });
 test('video metadata uses the supplied language list and removes raw URLs', () => {
   const raw = fixtureMetadata(); raw.subtitles.en[0].url += '&signature=secret-not-returned';
@@ -90,7 +109,7 @@ test('read bridge reuses the verified Roam process and timestamps the actual sna
   };
   const reader = createCaptionReader({ platform: 'darwin', exec, now: () => now });
   const result = await reader.read({ title: 'Test video', frame });
-  assert.deepEqual(result, { state: 'off', reason: 'control', checkedAt: 1000 });
+  assert.deepEqual(result, { state: 'off', reason: 'control', controlsVisible: true, checkedAt: 1000 });
   now = 7000;
   assert.equal((await reader.read({ title: 'Test video', frame })).checkedAt, 7000);
   assert.equal(calls.filter(args => args[1] === 'list_apps').length, 1);

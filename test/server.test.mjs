@@ -185,6 +185,13 @@ test('native CC state forwards the scoped controls-visible reason', async t => {
   assert.deepEqual(data.reason, 'controls-visible');
   assert.equal(data.state, 'unknown');
 });
+test('native CC route forwards only a boolean player-control visibility observation', async t => {
+  for (const controlsVisible of [true, false, undefined, 'false', 0]) {
+    const base = await fixture(t, { nativeCcReader: { read: async () => ({ state: 'unknown', reason: 'controls-hidden', controlsVisible }) } });
+    const data = await (await fetch(base + '/v1/youtube/native-cc-state', post({ videoId: id, frame }))).json();
+    assert.equal(data.controlsVisible, typeof controlsVisible === 'boolean' ? controlsVisible : undefined);
+  }
+});
 test('untrusted peers and origins cannot read any accessibility data', async (t) => {
   let reads = 0;
   const base = await fixture(t, { verifyPeer: async () => { throw Object.assign(new Error('Denied'), { status: 403 }); }, nativeCcReader: { read: () => { reads++; } } });

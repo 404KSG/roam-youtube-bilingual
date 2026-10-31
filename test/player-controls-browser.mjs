@@ -11,7 +11,7 @@ export async function setupPlayerControlsFixture({ sourceCues, targetCues } = {}
   Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
   const source = 'The same English caption stays readable without covering playback controls.';
   const target = '这条测试字幕应该避开进度条，同时保留原来的字号和颜色。';
-  let reason = 'control', nativeState = 'off', state = 2, time = 1, captionRequests = 0, ccChecks = 0;
+  let reason = 'control', nativeState = 'off', controlsVisible = true, state = 2, time = 1, captionRequests = 0, ccChecks = 0;
   const wait = async condition => { const end = performance.now() + 7000; while (!condition()) { if (performance.now() > end) throw new Error('Control-clearance fixture timed out'); await new Promise(resolve => setTimeout(resolve, 30)); } };
   const host = () => document.querySelector('.ryb-surface-host');
   const box = () => host()?.shadowRoot.querySelector('.ryb-caption-box');
@@ -21,7 +21,7 @@ export async function setupPlayerControlsFixture({ sourceCues, targetCues } = {}
     let data;
     if (path.endsWith('/health')) data = { ok: true, service: 'roam-youtube-bilingual', apiVersion: 8, provider: 'youtube-unified' };
     else if (path.endsWith('/video-info')) data = { videoId: body.videoId, sourceLanguage: 'en', title: 'Mock', languages: [{ code: 'zh-Hans' }] };
-    else if (path.endsWith('/native-cc-state')) { ccChecks++; data = { videoId: body.videoId, state: nativeState, reason, checkedAt: Date.now() }; }
+    else if (path.endsWith('/native-cc-state')) { ccChecks++; data = { videoId: body.videoId, state: nativeState, reason, controlsVisible, checkedAt: Date.now() }; }
     else if (path.endsWith('/caption-session')) {
       captionRequests++;
       const base = { videoId: body.videoId, target: body.target, captionPolicy: 'same-source-v1' }, fingerprint = 'a'.repeat(64);
@@ -51,9 +51,12 @@ export async function setupPlayerControlsFixture({ sourceCues, targetCues } = {}
     frame, host, box, probe, wait,
     get ccChecks() { return ccChecks; },
     at(seconds) { time = seconds; tick(); },
-    nativeCc(nextState, nextReason) { nativeState = nextState; reason = nextReason; },
+    nativeCc(nextState, nextReason, visible = nextReason !== 'controls-hidden') {
+      nativeState = nextState; reason = nextReason; controlsVisible = visible;
+      frame.contentDocument.querySelector('#controls').hidden = visible === false;
+    },
     playback(nextState, controlsHidden = false) {
-      state = nextState; reason = controlsHidden ? 'controls-hidden' : 'control'; nativeState = controlsHidden ? 'unknown' : 'off';
+      state = nextState; reason = controlsHidden ? 'controls-hidden' : 'control'; nativeState = controlsHidden ? 'unknown' : 'off'; controlsVisible = !controlsHidden;
       frame.contentDocument.querySelector('#controls').hidden = controlsHidden; tick();
     },
     async geometry(style, frameStyle = '') {

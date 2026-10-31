@@ -2,7 +2,7 @@
 
 English and translated YouTube captions in one synchronized overlay, with global styling and local caching. No external AI translation service or API key.
 
-**Current build:** `0.5.0-beta.19` · **Helper API:** `8` · **Platform:** macOS Roam Desktop
+**Current build:** `0.5.0-beta.20` · **Helper API:** `8` · **Platform:** macOS Roam Desktop
 
 <img src="https://raw.githubusercontent.com/404KSG/roam-youtube-bilingual/3c75575b29d9388cdc86b06222943be39047d044/assets/roam-bilingual-subtitles.png" width="900" alt="English and Chinese captions in Roam, with independent font sizes, colors, and global subtitle settings">
 
@@ -13,7 +13,7 @@ English and translated YouTube captions in one synchronized overlay, with global
 - One player-local overlay, up to two lines per language, with independent font sizes and colors.
 - Joined captions reveal source cues as they start, without repeating shared translation cues or multi-word rolling overlaps.
 - Brief native-CC reactivation recovers quietly. A persistent conflict still warns and keeps bilingual captions hidden.
-- Captions clear the bottom playback controls while paused or interacting; verified idle playback can return to the normal low position.
+- Captions clear visible or unconfirmed playback controls. When controls are confirmed hidden and the interaction grace period expires, paused and playing captions return to the normal low position, even if the iframe retains focus.
 - Settings persist across videos and reloads on the same device.
 - English can appear first while a compact indicator shows translation loading.
 - Verified local caption bundles avoid unnecessary downloads. Uploaded target captions are preferred; automatic translations use the selected English source.
@@ -31,7 +31,7 @@ Requires Node.js 22.10+, yt-dlp, and CuaDriver with existing Accessibility acces
 
 3. Reload the extension, open a YouTube embed, and enable subtitles using the translate icon.
 
-The extension requires an API-v8 helper. **For beta.19, update and restart the local helper as well as reloading the extension.** The protocol remains v8, but the pause-state classification fix runs in the helper; reloading only the extension does not apply it. Use **YouTube subtitles: Fullscreen** to retain the overlay; YouTube's own iframe fullscreen/PiP excludes it.
+The extension requires an API-v8 helper. **For beta.20, update and restart the local helper as well as reloading the extension.** The protocol remains v8, but the helper now reports player-control visibility separately from native-CC state. Older helpers omit that observation, so the new client conservatively keeps captions raised until the helper is updated. Use **YouTube subtitles: Fullscreen** to retain the overlay; YouTube's own iframe fullscreen/PiP excludes it.
 
 ## Important notes
 
@@ -45,6 +45,6 @@ The extension requires an API-v8 helper. **For beta.19, update and restart the l
 
 [Submitted to Roam Depot for review](https://github.com/Roam-Research/roam-depot/pull/1509); not yet merged into the catalog.
 
-`./build.sh` builds and runs the tests. Beta.19 passed **169 Node tests** and **128 isolated browser checks**, including 23 subtitle-stability/pause checks and the existing layout, settings, session, seek, and cleanup regressions. Replaying the current targeted tests against beta.18 produced 12 failures. These checks use synthetic captions and player observations, not live YouTube or Roam accessibility data. Sustained live playback and native menu layouts still require desktop acceptance.
+`./build.sh` builds and runs the tests. Beta.20 passed **179 Node tests** and **142 isolated browser checks**, including 14 paused-position checks, 23 subtitle-stability/pause checks, and the existing regressions. Seven targeted regressions failed before this fix. In a browser fixture, actual pointer input left the iframe focused after departure: the paused caption's bottom gap changed from **128px before** to **39.69px after** at 886 × 496, with unchanged text and fonts. Player state and helper observations are simulated; sustained live YouTube/Roam playback still requires desktop acceptance.
 
-To reproduce the visual checks, build first, run `node test/player-controls-fixture.mjs`, open its printed local URL, and click **Run layout checks** or **Run stability checks**. [Before](assets/beta19-subtitles-before.png) / [after](assets/beta19-subtitles-after.png) show the same synthetic caption at the same timestamp; they are not live-video screenshots.
+To reproduce the visual checks, build first, run `node test/player-controls-fixture.mjs`, open its printed local URL, and click **Run paused-position checks**, **Run layout checks**, or **Run stability checks**. [Before](assets/beta20-paused-position-before.png) / [after](assets/beta20-paused-position-after.png) show the same paused synthetic caption with controls hidden; they are not live-video screenshots.

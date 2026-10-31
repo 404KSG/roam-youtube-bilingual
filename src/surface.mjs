@@ -36,8 +36,11 @@ export class VideoSurface {
     if (!parent || getComputedStyle(parent).position === 'static') return null;
     return parent;
   }
-  isInteracting() {
-    return this.iframe.matches(':hover') || document.activeElement === this.iframe || this.now() - this.lastInteraction < 3500;
+  isInteracting({ controlsHidden = false } = {}) {
+    // Clicking pause can leave iframe focus behind after its controls disappear.
+    // Fresh hidden-controls evidence may release that focus latch, but never
+    // hover or the short interaction grace period that protects newly shown UI.
+    return this.iframe.matches(':hover') || (!controlsHidden && document.activeElement === this.iframe) || this.now() - this.lastInteraction < 3500;
   }
   sync({ blocked = false, fontScale = 1, bottomRatio = 0.08 } = {}) {
     if (this.disposed) return;

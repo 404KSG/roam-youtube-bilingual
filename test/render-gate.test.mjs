@@ -230,6 +230,15 @@ test('settings progress drops the old native-CC warning after an off confirmatio
   await video.checkNativeCc();
   assert.equal(video.statusMessage(), 'Loading translation…');
 });
+test('only explicit hidden transport evidence lowers the caption layout', async () => {
+  for (const controlsVisible of [true, false, undefined, 'false']) {
+    const { video } = harness({ request: async () => ({ videoId: 'vif8NQcjVf0', state: 'unknown', reason: 'controls-hidden', controlsVisible, checkedAt: Date.now() }) });
+    installCaptionData(video, [{ start: 0, end: 2, text: 'English' }]);
+    Object.assign(video, { enabled: true, ccState: 'off', surface: { host: { style: { display: 'block' } } }, screenFrame: () => ({ x: 0, y: 0, width: 800, height: 450 }), updatePair() {} });
+    await video.checkNativeCc();
+    assert.equal(video.nativeControlsHidden, controlsVisible === false);
+  }
+});
 test('an expired CC-off confirmation cannot keep the overlay visible', () => {
   const { video } = harness();
   Object.assign(video, { enabled: true, ccState: 'off', ccVerifiedAt: Date.now() - 2000, pair: { source: 'English', target: '中文' } });
