@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0-beta.19 — Subtitle stability and pause-safe CC evidence
+
+- Keep bounded reading groups, but display only the source and target fragments whose cue has started. Stable cached prefix objects avoid a re-layout flicker on clock updates; real gaps, seeks, speaker changes, and narrow-view fallback retain their previous time-based behavior.
+- Remove only a repeated fallback translation copied from the same longer target cue. Preserve intentional repeated speech and independently authored repeated target fragments. Rolling source windows share a multi-word overlap without duplicating that overlap.
+- Treat centered static text as native-caption-on evidence only while playback chrome is absent. Visible pause chrome without an explicit CC checkbox remains unknown and keeps the fail-closed render gate closed.
+- Repeat native CC checks still unload captions, but static-text evidence neither claims ownership for restoration nor repeats the top warning in the same epoch. An explicit CC control OFF observation rearms the warning for a later genuine ON conflict.
+- Added synthetic parser/controller/helper regressions for future speech, rolling windows, long fallback targets, pause chrome ambiguity, repeated CC evidence, and explicit ON/OFF cycles. No live Roam/YouTube playback claim is made.
+
 ## 0.5.0-beta.18 — Player-local captions and control clearance
 
 - Replace the fixed 8% subtitle offset during interaction with a protected bottom control region. Paused, focused, hovered, resized, or unconfirmed players keep that region clear; verified hidden controls during idle playback allow the normal low position.

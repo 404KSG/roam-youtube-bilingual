@@ -43,8 +43,12 @@ export function inspectNativeCc(snapshot, { title, frame }) {
     return { state: 'unknown', reason: 'unrecognized-control' };
   }
   // Presence only: never read, return, or persist these nodes' text. A native
-  // caption appearing inside the exact player is a reason to hide our layer.
+  // caption appearing inside an otherwise control-free player is a reason to
+  // hide our layer. When pause chrome is visible but its CC checkbox is absent,
+  // centered static text is ambiguous and must fail closed as unknown.
   const interactive = new Set(['AXButton', 'AXLink', 'AXMenuItem', 'AXSlider', 'AXCheckBox', 'AXPopUpButton', 'AXTextField', 'AXTextArea', 'AXHeading']);
+  const playbackChromeVisible = elements.some(entry => ['AXButton', 'AXSlider', 'AXPopUpButton'].includes(entry.role) && belongsToPlayer(entry));
+  if (playbackChromeVisible) return { state: 'unknown', reason: 'controls-visible' };
   const nativeCaptionVisible = elements.some(entry => {
     if (entry.role !== 'AXStaticText' || !belongsToPlayer(entry)) return false;
     const r = rectOf(entry.frame);

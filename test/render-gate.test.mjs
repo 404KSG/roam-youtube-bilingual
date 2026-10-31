@@ -236,3 +236,30 @@ test('an expired CC-off confirmation cannot keep the overlay visible', () => {
   video.drawPair();
   assert.equal(video.box.hidden, true);
 });
+test('repeated static-text CC evidence unloads again but neither rearms the warning nor claims restoration ownership', async () => {
+  const { video, commands } = harness({ request: async () => ({ videoId: 'vif8NQcjVf0', state: 'on', reason: 'native-caption-visible', checkedAt: Date.now() }) });
+  installCaptionData(video, [{ start: 0, end: 2, text: 'English' }]);
+  Object.assign(video, { enabled: true, info: { sourceLanguage: 'en' }, surface: { host: { style: { display: 'block' } } }, screenFrame: () => ({ x: 0, y: 0, width: 800, height: 450 }) });
+  let notices = 0; video.notice = () => { notices++; };
+  await video.checkNativeCc(); video.nextCcCheck = 0;
+  await video.checkNativeCc();
+  assert.deepEqual(commands, ['off', 'off']);
+  assert.equal(notices, 1);
+  assert.notEqual(video.nativeWasOn, true);
+  assert.notEqual(video.nativeChanged, true);
+});
+test('an explicit CC-off control observation rearms a later real CC-on warning', async () => {
+  const states = ['on', 'off', 'on'];
+  const { video, commands } = harness({ request: async () => ({ videoId: 'vif8NQcjVf0', state: states.shift(), reason: 'control', checkedAt: Date.now() }) });
+  installCaptionData(video, [{ start: 0, end: 2, text: 'English' }]);
+  Object.assign(video, { enabled: true, info: { sourceLanguage: 'en' }, surface: { host: { style: { display: 'block' } } }, screenFrame: () => ({ x: 0, y: 0, width: 800, height: 450 }) });
+  video.clock.isSynchronized = () => true;
+  const notices = []; video.notice = message => notices.push(message);
+  await video.checkNativeCc(); video.nextCcCheck = 0;
+  await video.checkNativeCc(); video.nextCcCheck = 0;
+  await video.checkNativeCc();
+  assert.deepEqual(commands, ['off', 'off']);
+  assert.deepEqual(notices, ['Native captions are still on. Bilingual subtitles remain hidden.', 'Native captions are still on. Bilingual subtitles remain hidden.']);
+  assert.equal(video.nativeWasOn, true);
+  assert.equal(video.nativeChanged, true);
+});

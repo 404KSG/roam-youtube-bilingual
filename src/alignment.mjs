@@ -28,10 +28,16 @@ export function alignCaptionTracks(sourceCues, targetCues, language) {
     }
     if (owner >= 0) groups[owner].push(target);
   }
-  return sourceCues.map((source, index) => ({
-    start: source.start, end: source.end, source: singleLine(source.text),
-    // A longer target cue can span several short English cues. Only reuse an
-    // actually overlapping cue; never borrow a translation across a time gap.
-    target: joinCaptionFragments(groups[index].length ? groups[index] : fallback[index] ? [fallback[index].target] : [], language),
-  }));
+  return sourceCues.map((source, index) => {
+    const owned = groups[index], fallbackTarget = owned.length ? null : fallback[index]?.target || null;
+    return {
+      start: source.start, end: source.end, source: singleLine(source.text),
+      // A longer target cue can span several short English cues. Only reuse an
+      // actually overlapping cue; never borrow a translation across a time gap.
+      target: joinCaptionFragments(owned.length ? owned : fallbackTarget ? [fallbackTarget] : [], language),
+      // Display grouping needs provenance to avoid repeating this fallback in
+      // one bubble. Keep cue objects private to the active in-memory session.
+      targetCues: owned.length ? owned : fallbackTarget ? [fallbackTarget] : [], fallbackTarget,
+    };
+  });
 }

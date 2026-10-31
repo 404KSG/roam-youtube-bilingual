@@ -92,7 +92,7 @@ class VideoCaptions {
     this.iframe = iframe; this.videoId = videoIdFromUrl(iframe.src); this.embedId = this.videoId;
     const saved = preferences.get(this.videoId); this.config = validateConfig(saved); this.wantsEnabled = saved.enabled; this.restoreAttempted = false;
     this.preferenceError = preferences.saveWarning; this.preferenceNotice = preferences.notice;
-    this.captionData = null; this.time = 0; this.epoch = 0; this.enabled = false; this.loading = false; this.ccState = 'unknown'; this.ccVerifiedAt = 0; this.nativeWasOn = null; this.nativeChanged = false;
+    this.captionData = null; this.time = 0; this.epoch = 0; this.enabled = false; this.loading = false; this.ccState = 'unknown'; this.ccVerifiedAt = 0; this.nativeWasOn = null; this.nativeChanged = false; this.nativeCcOnNoticeEpoch = null;
     this.nativeControlsHidden = false;
     this.surface = new VideoSurface(iframe, STYLE, { onLayoutChange: () => this.drawPair() }); this.surface.host.dataset.version = VERSION;
     this.box = el('div', 'ryb-caption-box'); this.box.hidden = true; this.box.setAttribute('aria-label', 'Bilingual subtitles');
@@ -281,7 +281,7 @@ class VideoCaptions {
     // Never switch native CC merely because a download failed or a dialog closed.
     // Restore only a state this instance positively observed and then changed.
     if (this.nativeChanged && this.nativeWasOn === true) this.clock?.restoreCaptions();
-    this.nativeChanged = false; this.nativeWasOn = null;
+    this.nativeChanged = false; this.nativeWasOn = null; this.nativeCcOnNoticeEpoch = null;
     clearTimeout(this.noticeTimer); this.noticeBox.hidden = true; this.loadingPhase = ''; this.targetPhase = ''; this.lastNoticeKey = null; this.updateIcon();
   }
   async changeTarget() {
@@ -310,14 +310,20 @@ class VideoCaptions {
       if (this.ccState !== 'off') {
         this.clearPair();
         if (this.ccState === 'on') {
-          this.nativeWasOn ??= true; this.nativeChanged = true;
+          // Static caption evidence still closes the gate, but only an explicit
+          // control may establish ownership for later restoration.
+          if (data.reason === 'control') { this.nativeWasOn ??= true; this.nativeChanged = true; }
           this.clock?.unloadCaptions();
           if (this.loading || this.targetError) this.refreshStatusNotice();
-          else this.notice('Native captions are still on. Bilingual subtitles remain hidden.');
+          else if (this.nativeCcOnNoticeEpoch !== this.epoch) {
+            this.nativeCcOnNoticeEpoch = this.epoch;
+            this.notice('Native captions are still on. Bilingual subtitles remain hidden.');
+          }
         } else if (data.reason === 'controls-hidden') this.clock?.wakeCaptionControls();
         if (settings?.owner === this) settings.refresh?.();
         return;
       }
+      if (data.reason === 'control') this.nativeCcOnNoticeEpoch = null;
       this.nativeWasOn ??= false; this.ccVerifiedAt = data.checkedAt;
       this.nativeError = ''; this.refreshStatusNotice(); this.updatePair();
     } catch (error) {

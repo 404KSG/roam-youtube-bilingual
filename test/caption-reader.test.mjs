@@ -34,6 +34,12 @@ test('hidden controls and a missing player are distinct; native caption nodes pr
   snapshot.elements.push(node(7, 2, 'AXStaticText', 'Native caption content', { x: 350, y: 480, w: 300, h: 24 }));
   assert.deepEqual(inspectNativeCc(snapshot, { title: 'Test video', frame }), { state: 'on', reason: 'native-caption-visible' });
 });
+test('visible playback chrome without a CC checkbox cannot turn centered pause text into CC-on evidence', () => {
+  const snapshot = fixture(); snapshot.elements = snapshot.elements.filter(entry => entry.element_index !== 3);
+  snapshot.elements.push(node(7, 2, 'AXButton', 'Play', { x: 120, y: 500, w: 32, h: 32 }));
+  snapshot.elements.push(node(8, 2, 'AXStaticText', 'Chapter title', { x: 350, y: 480, w: 300, h: 24 }));
+  assert.deepEqual(inspectNativeCc(snapshot, { title: 'Test video', frame }), { state: 'unknown', reason: 'controls-visible' });
+});
 test('video metadata uses the supplied language list and removes raw URLs', () => {
   const raw = fixtureMetadata(); raw.subtitles.en[0].url += '&signature=secret-not-returned';
   const info = sanitizeVideoInfo(raw, 'vif8NQcjVf0');
