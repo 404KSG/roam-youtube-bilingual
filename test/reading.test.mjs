@@ -41,6 +41,16 @@ test('growing rolling windows remove a fully covered prefix but keep equal repea
   const repeated = readingSegments([pair(0, 2, 'hello world', '第一句'), pair(2, 4, 'hello world', '第二句')], 'zh-Hans');
   assert.equal(visibleSegment(repeated, 2.5).source, 'hello world hello world');
 });
+test('identical consecutive speech remains repeated after an earlier group prefix', () => {
+  const groups = readingSegments([
+    pair(0, 1, 'please say', '请说'),
+    pair(1, 2, 'hello world', '你好世界'),
+    pair(2, 3, 'hello world', '你好世界'),
+  ], 'zh-Hans');
+  assert.equal(visibleSegment(groups, 2.5).source, 'please say hello world hello world');
+  assert.equal(visibleSegment(groups, 2.5).target, '请说你好世界你好世界');
+  assert.equal(visibleSegment(groups, .5).source, 'please say', 'seeking back must not reveal later parts');
+});
 test('grouping retains intentional repeated speech and translation fragments', () => {
   const groups = readingSegments([pair(0, 2, 'no', '是。'), pair(2, 4, 'no', '是。')], 'zh-Hans');
   assert.equal(visibleSegment(groups, 2.5).source, 'no no');

@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 const files = new Map([
   ['/test-controls-fixture', [new URL('./player-controls-fixture.html', import.meta.url), 'text/html']],
   ['/test/player-controls-browser.mjs', [new URL('./player-controls-browser.mjs', import.meta.url), 'text/javascript']],
+  ['/test/subtitle-stability-browser.mjs', [new URL('./subtitle-stability-browser.mjs', import.meta.url), 'text/javascript']],
   ['/src/surface.mjs', [new URL('../src/surface.mjs', import.meta.url), 'text/javascript']],
   ['/roam-youtube-bilingual.js', [new URL('../dist/roam-youtube-bilingual.js', import.meta.url), 'text/javascript']],
 ]);

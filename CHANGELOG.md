@@ -2,11 +2,13 @@
 
 ## 0.5.0-beta.19 — Subtitle stability and pause-safe CC evidence
 
-- Keep bounded reading groups, but display only the source and target fragments whose cue has started. Stable cached prefix objects avoid a re-layout flicker on clock updates; real gaps, seeks, speaker changes, and narrow-view fallback retain their previous time-based behavior.
+- Keep bounded reading groups, but do not reveal later source cues before their start times. Preserve source-led translation alignment and reuse cached display prefixes between boundaries; real gaps, seeks, speaker changes, and narrow-view fallback remain time-based.
 - Remove only a repeated fallback translation copied from the same longer target cue. Preserve intentional repeated speech and independently authored repeated target fragments. Rolling source windows share a multi-word overlap without duplicating that overlap.
 - Treat centered static text as native-caption-on evidence only while playback chrome is absent. Visible pause chrome without an explicit CC checkbox remains unknown and keeps the fail-closed render gate closed.
-- Repeat native CC checks still unload captions, but static-text evidence neither claims ownership for restoration nor repeats the top warning in the same epoch. An explicit CC control OFF observation rearms the warning for a later genuine ON conflict.
-- Added synthetic parser/controller/helper regressions for future speech, rolling windows, long fallback targets, pause chrome ambiguity, repeated CC evidence, and explicit ON/OFF cycles. No live Roam/YouTube playback claim is made.
+- Native CC conflicts still hide the overlay and request recovery immediately. A two-second warning grace period lets brief pause-related reactivation recover without a toast; persistent conflicts still warn, with immediate diagnostics in settings. Static-text evidence cannot claim restoration ownership, and an explicit OFF observation rearms a later genuine conflict.
+- Preserve identical consecutive multi-word cues even after earlier text has accumulated in the same reading group.
+- Passed 169 Node tests and 128 isolated browser checks, including 23 new stability/pause checks. Replaying the targeted regression suite against beta.18 fails 12 tests. Added before/after synthetic screenshots and a runnable stability fixture; no live Roam/YouTube playback claim is made.
+- Update and restart the helper and reload the extension together. API v8 remains compatible, but the helper's pause-chrome classification needs the new server code.
 
 ## 0.5.0-beta.18 — Player-local captions and control clearance
 

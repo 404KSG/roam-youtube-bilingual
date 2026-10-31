@@ -236,32 +236,57 @@ test('an expired CC-off confirmation cannot keep the overlay visible', () => {
   video.drawPair();
   assert.equal(video.box.hidden, true);
 });
-test('repeated static-text CC evidence unloads again but neither rearms the warning nor claims restoration ownership', async () => {
-  const { video, commands } = harness({ request: async () => ({ videoId: 'vif8NQcjVf0', state: 'on', reason: 'native-caption-visible', checkedAt: Date.now() }) });
+test('persistent static-text CC evidence warns once but never claims restoration ownership', async () => {
+  let now = 1000;
+  const { video, commands } = harness({ now: () => now, request: async () => ({ videoId: 'vif8NQcjVf0', state: 'on', reason: 'native-caption-visible', checkedAt: now }) });
   installCaptionData(video, [{ start: 0, end: 2, text: 'English' }]);
   Object.assign(video, { enabled: true, info: { sourceLanguage: 'en' }, surface: { host: { style: { display: 'block' } } }, screenFrame: () => ({ x: 0, y: 0, width: 800, height: 450 }) });
   let notices = 0; video.notice = () => { notices++; };
-  await video.checkNativeCc(); video.nextCcCheck = 0;
-  await video.checkNativeCc();
-  assert.deepEqual(commands, ['off', 'off']);
+  await video.checkNativeCc(); assert.equal(notices, 0); video.nextCcCheck = 0;
+  now += 2100; await video.checkNativeCc(); video.nextCcCheck = 0;
+  now += 1000; await video.checkNativeCc();
+  assert.deepEqual(commands, ['off', 'off', 'off']);
   assert.equal(notices, 1);
   assert.notEqual(video.nativeWasOn, true);
   assert.notEqual(video.nativeChanged, true);
 });
-test('an explicit CC-off control observation rearms a later real CC-on warning', async () => {
-  const states = ['on', 'off', 'on'];
-  const { video, commands } = harness({ request: async () => ({ videoId: 'vif8NQcjVf0', state: states.shift(), reason: 'control', checkedAt: Date.now() }) });
+test('an explicit CC-off observation rearms a later persistent CC-on warning', async () => {
+  let now = 1000;
+  const states = ['on', 'on', 'off', 'on', 'on'];
+  const { video, commands } = harness({ now: () => now, request: async () => ({ videoId: 'vif8NQcjVf0', state: states.shift(), reason: 'control', checkedAt: now }) });
   installCaptionData(video, [{ start: 0, end: 2, text: 'English' }]);
   Object.assign(video, { enabled: true, info: { sourceLanguage: 'en' }, surface: { host: { style: { display: 'block' } } }, screenFrame: () => ({ x: 0, y: 0, width: 800, height: 450 }) });
   video.clock.isSynchronized = () => true;
   const notices = []; video.notice = message => notices.push(message);
+  await video.checkNativeCc(); video.nextCcCheck = 0; assert.equal(notices.length, 0);
+  now += 2100; await video.checkNativeCc(); video.nextCcCheck = 0;
   await video.checkNativeCc(); video.nextCcCheck = 0;
-  await video.checkNativeCc(); video.nextCcCheck = 0;
-  await video.checkNativeCc();
-  assert.deepEqual(commands, ['off', 'off']);
+  await video.checkNativeCc(); video.nextCcCheck = 0; assert.equal(notices.length, 1);
+  now += 2100; await video.checkNativeCc();
+  assert.deepEqual(commands, ['off', 'off', 'off', 'off']);
   assert.deepEqual(notices, ['Native captions are still on. Bilingual subtitles remain hidden.', 'Native captions are still on. Bilingual subtitles remain hidden.']);
   assert.equal(video.nativeWasOn, true);
   assert.equal(video.nativeChanged, true);
+});
+test('brief native CC reactivation on repeated pauses keeps the gate closed without a top warning', async () => {
+  let now = 1000, state = 'off';
+  const { video, commands } = harness({ now: () => now, request: async () => ({ videoId: 'vif8NQcjVf0', state, reason: 'control', checkedAt: now }) });
+  installCaptionData(video, [{ start: 0, end: 20, text: 'English' }]);
+  Object.assign(video, { enabled: true, time: 1, surface: { host: { style: { display: 'block' } } }, screenFrame: () => ({ x: 0, y: 0, width: 800, height: 450 }) });
+  video.clock.isSynchronized = () => true; video.drawPair = () => { video.box.hidden = false; };
+  const notices = []; video.notice = message => notices.push(message);
+  await video.checkNativeCc();
+  for (let pause = 0; pause < 3; pause++) {
+    state = 'on'; now += 1000; video.nextCcCheck = 0;
+    await video.checkNativeCc();
+    assert.equal(video.box.hidden, true, 'the warning grace period must not keep unsafe captions visible');
+    assert.match(video.statusMessage(), /Native captions are still on/, 'settings retain immediate diagnostics');
+    state = 'off'; now += 800; video.nextCcCheck = 0;
+    await video.checkNativeCc();
+    assert.equal(video.box.hidden, false);
+  }
+  assert.deepEqual(commands, ['off', 'off', 'off']);
+  assert.deepEqual(notices, []);
 });
 test('visible chrome without its CC checkbox temporarily hides a confirmed-off overlay without wake or ownership', async () => {
   const observations = [

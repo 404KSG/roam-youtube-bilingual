@@ -2,7 +2,7 @@
 
 English and translated YouTube captions in one synchronized overlay, with global styling and local caching. No external AI translation service or API key.
 
-**Current build:** `0.5.0-beta.18` · **Helper API:** `8` · **Platform:** macOS Roam Desktop
+**Current build:** `0.5.0-beta.19` · **Helper API:** `8` · **Platform:** macOS Roam Desktop
 
 <img src="https://raw.githubusercontent.com/404KSG/roam-youtube-bilingual/3c75575b29d9388cdc86b06222943be39047d044/assets/roam-bilingual-subtitles.png" width="900" alt="English and Chinese captions in Roam, with independent font sizes, colors, and global subtitle settings">
 
@@ -11,6 +11,8 @@ English and translated YouTube captions in one synchronized overlay, with global
 ## Features
 
 - One player-local overlay, up to two lines per language, with independent font sizes and colors.
+- Joined captions reveal source cues as they start, without repeating shared translation cues or multi-word rolling overlaps.
+- Brief native-CC reactivation recovers quietly. A persistent conflict still warns and keeps bilingual captions hidden.
 - Captions clear the bottom playback controls while paused or interacting; verified idle playback can return to the normal low position.
 - Settings persist across videos and reloads on the same device.
 - English can appear first while a compact indicator shows translation loading.
@@ -29,7 +31,7 @@ Requires Node.js 22.10+, yt-dlp, and CuaDriver with existing Accessibility acces
 
 3. Reload the extension, open a YouTube embed, and enable subtitles using the translate icon.
 
-The extension requires an API-v8 helper. Existing API-v8 helpers remain compatible with beta.18; no helper restart is needed for this client update. Use **YouTube subtitles: Fullscreen** to retain the overlay; YouTube's own iframe fullscreen/PiP excludes it.
+The extension requires an API-v8 helper. **For beta.19, update and restart the local helper as well as reloading the extension.** The protocol remains v8, but the pause-state classification fix runs in the helper; reloading only the extension does not apply it. Use **YouTube subtitles: Fullscreen** to retain the overlay; YouTube's own iframe fullscreen/PiP excludes it.
 
 ## Important notes
 
@@ -43,6 +45,6 @@ The extension requires an API-v8 helper. Existing API-v8 helpers remain compatib
 
 [Submitted to Roam Depot for review](https://github.com/Roam-Research/roam-depot/pull/1509); not yet merged into the catalog.
 
-`./build.sh` builds and runs the tests. The current runtime passed **156 Node tests**, **115 isolated UI checks**, and **5 native-fetch transport checks**. Trusted pointer input can drag the fixture's iframe seek bar, and bilingual fullscreen geometry/cleanup was checked. These use simulated player controls and captions; sustained live YouTube playback, native menu layouts, and full desktop acceptance remain incomplete.
+`./build.sh` builds and runs the tests. Beta.19 passed **169 Node tests** and **128 isolated browser checks**, including 23 subtitle-stability/pause checks and the existing layout, settings, session, seek, and cleanup regressions. Replaying the current targeted tests against beta.18 produced 12 failures. These checks use synthetic captions and player observations, not live YouTube or Roam accessibility data. Sustained live playback and native menu layouts still require desktop acceptance.
 
-For the control-clearance fixture, build first, run `node test/player-controls-fixture.mjs`, open its printed local URL, and click **Run layout checks**.
+To reproduce the visual checks, build first, run `node test/player-controls-fixture.mjs`, open its printed local URL, and click **Run layout checks** or **Run stability checks**. [Before](assets/beta19-subtitles-before.png) / [after](assets/beta19-subtitles-after.png) show the same synthetic caption at the same timestamp; they are not live-video screenshots.

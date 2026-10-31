@@ -1,9 +1,12 @@
 import { activeCueIndex } from './core.mjs';
 import { joinCaptionFragments } from './alignment.mjs';
 
-function joinSourceFragments(previous, next) {
+function joinSourceFragments(previous, next, previousPart = previous) {
   const before = previous.trim().split(/\s+/), after = next.trim().split(/\s+/);
-  if (before.length === after.length && before.every((word, index) => word === after[index])) return `${previous} ${next}`;
+  // Compare the immediately preceding cue, not its accumulated prefix: an
+  // intentional repeat can occur after earlier speech in the same group.
+  const prior = previousPart.trim().split(/\s+/);
+  if (prior.length === after.length && prior.every((word, index) => word === after[index])) return `${previous} ${next}`;
   let shared = 0;
   for (let size = Math.min(before.length, after.length); size >= 2; size--) {
     if (before.slice(-size).every((word, index) => word === after[index])) { shared = size; break; }
@@ -23,7 +26,7 @@ function appendTarget(target, pair, targetCues, language) {
 function createPrefixes(segment, language) {
   let source = '', target = ''; const targetCues = new Set();
   segment.prefixes = segment.parts.map((part, index) => {
-    source = index ? joinSourceFragments(source, part.source) : part.source;
+    source = index ? joinSourceFragments(source, part.source, segment.parts[index - 1].source) : part.source;
     target = appendTarget(target, part, targetCues, language);
     addTargetCues(targetCues, part);
     return { start: segment.start, end: segment.end, source, target };
@@ -42,7 +45,7 @@ export function readingSegments(pairs, language) {
       && pair.start - last.end <= .2 && pair.end - last.start <= 8 && last.parts.length < 4
       && last.source.length + pair.source.length < 220 && last.target.length + target.length < 180;
     if (canJoin) {
-      last.end = pair.end; last.source = joinSourceFragments(last.source, pair.source);
+      last.end = pair.end; last.source = joinSourceFragments(last.source, pair.source, last.parts.at(-1).source);
       last.target = appendTarget(last.target, pair, last.targetCues, language);
       addTargetCues(last.targetCues, pair); last.parts.push(pair);
     } else {
