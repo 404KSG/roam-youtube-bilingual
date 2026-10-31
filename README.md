@@ -22,7 +22,7 @@ English and translated YouTube captions in one synchronized overlay, with global
 
 Requires Node.js 22.10+, yt-dlp, and CuaDriver with existing Accessibility access. Nothing is installed or authorized automatically.
 
-1. Clone this repository and run `./start.command` to start the local helper.
+1. Clone this repository and check out the **same source commit pinned by the Depot entry or PR**, then run `./start.command` to start the local helper. The default branch may not contain an unmerged review build.
 2. Until catalog approval, add this shorthand in Roam Depot's developer mode:
 
    ```text
